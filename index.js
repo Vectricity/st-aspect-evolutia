@@ -2387,7 +2387,7 @@ function observeDom() {
 // ============================================================================
 // Purpose:
 // - Own one-time startup for Aspect: Exolutia.
-// - SillyTavern may call activate; the module also self-boots for compatibility.
+// - Module self-boots for compatibility.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
