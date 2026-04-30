@@ -1,0 +1,10 @@
+{
+  "display_name": "Aspect: Evolutia",
+  "loading_order": 1,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "author": "Genisai",
+  "version": "0.0.1",
+  "homePage": ""
+}
