@@ -1,4 +1,4 @@
-# 🚧 Not Yet Ready! Work in Progress. 🚧
+# 🚧 Work in Progress, but Functional! 🚧
 
 # Aspect: Evolutia
 
