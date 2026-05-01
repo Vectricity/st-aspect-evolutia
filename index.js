@@ -34,13 +34,61 @@ const ASPECT_MACRO_NAME = 'aspectEvolutiaDescription';
 const ASPECT_MACRO_TEXT = `{{${ASPECT_MACRO_NAME}}}`;
 const NATIVE_DESCRIPTION_PROMPT_ID = 'charDescription';
 
+const KEYWORD_MODE = Object.freeze({
+    ANY: 'any',
+    ALL: 'all',
+});
+
+const IMPORT_SOURCE = Object.freeze({
+    CHARACTER_CARD: 'character_card',
+    NATIVE_FIELDS: 'native_fields',
+    FILE_JSON: 'file_json',
+    CLIPBOARD_JSON: 'clipboard_json',
+});
+
+const EXPORT_TARGET = Object.freeze({
+    FILE_JSON: 'file_json',
+    CLIPBOARD_JSON: 'clipboard_json',
+});
+
+const NATIVE_IMPORT_HEADINGS = new Set([
+    'appearance',
+    'backstory',
+    'background',
+    'personality',
+    'scenario',
+    'relationships',
+    'relationship',
+    'knowledge',
+    'abilities',
+    'ability',
+    'powers',
+    'power',
+    'combat style',
+    'inventory',
+    'stats',
+    'attributes',
+    'rules',
+    'behavior',
+    'behaviour',
+]);
+
 const UI = Object.freeze({
     STYLE_ID: 'dsf_style',
     BAR_ID: 'dsf_swap_bar',
     PANEL_ID: 'dsf_panel',
+    BOTTOM_ACTIONS_ID: 'dsf_bottom_actions',
     TOKEN_ROW_ID: 'dsf_token_row',
     SWAP_ID: 'dsf_swap_enabled',
-    ADD_ID: 'dsf_add_field',
+    DELETE_ALL_TOP_ID: 'dsf_delete_all_fields_top',
+    ADD_TOP_ID: 'dsf_add_field_top',
+    ADD_BOTTOM_ID: 'dsf_add_field_bottom',
+    IMPORT_ID: 'dsf_import',
+    IMPORT_MENU_ID: 'dsf_import_menu',
+    EXPORT_ID: 'dsf_export',
+    EXPORT_MENU_ID: 'dsf_export_menu',
+    CHARACTER_CARD_IMPORT_FILE_ID: 'dsf_character_card_import_file',
+    DYNAMIC_FIELDS_IMPORT_FILE_ID: 'dsf_dynamic_fields_import_file',
     WI_SCAN_ID: 'dsf_allow_wi_scan',
     WI_SCAN_WRAP_ID: 'dsf_wi_scan_wrap',
     TOKEN_ID: 'dsf_token_estimate',
@@ -85,10 +133,14 @@ const STANDARD_TOKEN_COUNTER_SELECTORS = [
 let booted = false;
 let saveTimer = null;
 let mountTimer = null;
-let pendingInputSnapshot = '';
 let currentGenerationCharacterId = undefined;
 let tokenUpdateSerial = 0;
 let manifestMeta = { ...DEFAULT_MANIFEST_META };
+let fieldPointerDrag = null;
+let fieldDragAutoScrollFrame = null;
+
+const FIELD_DRAG_AUTOSCROLL_MARGIN = 80;
+const FIELD_DRAG_AUTOSCROLL_MAX_SPEED = 22;
 
 const stateCache = new Map();
 const descriptionBackups = new Map();
@@ -146,6 +198,62 @@ function getAuthorName(author) {
     return '';
 }
 
+function sanitizeFilename(value) {
+    return String(value || 'character')
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 120) || 'character';
+}
+
+function titleCase(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeHeadingKey(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+}
+
+function splitLinesForJson(value) {
+    const text = String(value ?? '');
+
+    if (!text) {
+        return [];
+    }
+
+    return text.replace(/\r\n/g, '\n').split('\n');
+}
+
+function joinLinesFromJson(value) {
+    if (Array.isArray(value)) {
+        return value.map((line) => String(line ?? '')).join('\n');
+    }
+
+    return String(value ?? '');
+}
+
+function getPositionInputWidth(value) {
+    const text = String(value ?? '').trim();
+    const characterCount = Math.max(1, text.length || 1);
+
+    return `${Math.max(2, Math.ceil(characterCount * 1.5))}ch`;
+}
+
+function syncPositionInputWidth(input) {
+    if (!input) {
+        return;
+    }
+
+    input.style.width = getPositionInputWidth(input.value);
+}
+
 // -----------------------------------------------------------------------------
 // Shared Utilities - HTML Escaping
 // -----------------------------------------------------------------------------
@@ -163,6 +271,41 @@ function escapeTextarea(value) {
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;');
+}
+
+// -----------------------------------------------------------------------------
+// Shared Utilities - File and Clipboard Helpers
+// -----------------------------------------------------------------------------
+
+function downloadJsonFile(filename, payload) {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    URL.revokeObjectURL(url);
+}
+
+async function copyTextToClipboard(text) {
+    if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard write is unavailable.');
+    }
+
+    await navigator.clipboard.writeText(text);
+}
+
+async function readTextFromClipboard() {
+    if (!navigator.clipboard?.readText) {
+        throw new Error('Clipboard read is unavailable.');
+    }
+
+    return navigator.clipboard.readText();
 }
 
 // ============================================================================
@@ -241,6 +384,14 @@ function getCharacterName(characterId = getMacroCharacterId()) {
 
 function getCacheKey(characterId = getActiveCharacterId()) {
     return characterId === undefined || characterId === null ? '__none__' : String(characterId);
+}
+
+function getNativeDescriptionForCharacter(character) {
+    return String(character?.description ?? character?.data?.description ?? '').trim();
+}
+
+function getNativePersonalityForCharacter(character) {
+    return String(character?.personality ?? character?.data?.personality ?? '').trim();
 }
 
 // -----------------------------------------------------------------------------
@@ -454,6 +605,7 @@ function createDefaultFields() {
             instruction: DEFAULT_FIELD_INSTRUCTION,
             exposeInstruction: false,
             keywords: '',
+            keywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -463,6 +615,7 @@ function createDefaultFields() {
             instruction: DEFAULT_FIELD_INSTRUCTION,
             exposeInstruction: false,
             keywords: '',
+            keywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -472,6 +625,7 @@ function createDefaultFields() {
             instruction: DEFAULT_FIELD_INSTRUCTION,
             exposeInstruction: false,
             keywords: '',
+            keywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -506,6 +660,10 @@ function normalizeInstruction(rawInstruction) {
     return instruction;
 }
 
+function normalizeKeywordMode(rawMode) {
+    return rawMode === KEYWORD_MODE.ANY ? KEYWORD_MODE.ANY : KEYWORD_MODE.ALL;
+}
+
 function normalizeField(field = {}) {
     return {
         id: typeof field.id === 'string' && field.id.trim() ? field.id : makeId(),
@@ -515,6 +673,7 @@ function normalizeField(field = {}) {
         instruction: normalizeInstruction(field.instruction),
         exposeInstruction: Boolean(field.exposeInstruction),
         keywords: String(field.keywords ?? ''),
+        keywordMode: normalizeKeywordMode(field.keywordMode),
         content: String(field.content ?? ''),
     };
 }
@@ -549,6 +708,84 @@ function findField(state, fieldId) {
     return state.fields.find((field) => field.id === fieldId);
 }
 
+function getUniqueFieldName(existingFields, requestedName) {
+    const baseName = String(requestedName || 'Imported Field').trim() || 'Imported Field';
+    const existingNames = new Set(existingFields.map((field) => String(field.name || '').trim().toLowerCase()));
+
+    if (!existingNames.has(baseName.toLowerCase())) {
+        return baseName;
+    }
+
+    let counter = 2;
+
+    while (existingNames.has(`${baseName} ${counter}`.toLowerCase())) {
+        counter += 1;
+    }
+
+    return `${baseName} ${counter}`;
+}
+
+function prepareImportedFields(fields, existingFields = []) {
+    const result = [];
+    const nameContext = [...existingFields];
+
+    for (const rawField of fields) {
+        const normalized = normalizeField({
+            ...rawField,
+            id: makeId(),
+            enabled: rawField?.enabled !== false,
+            keywordMode: normalizeKeywordMode(rawField?.keywordMode),
+        });
+
+        normalized.name = getUniqueFieldName(nameContext, normalized.name);
+        normalized.purpose = normalized.purpose.trim() || normalized.name;
+        nameContext.push(normalized);
+        result.push(normalized);
+    }
+
+    return result;
+}
+
+// -----------------------------------------------------------------------------
+// Field and State Model - Clean Import / Export Conversion
+// -----------------------------------------------------------------------------
+
+function exportFieldForJson(field, index = 0) {
+    const normalized = normalizeField(field);
+
+    return {
+        order: index + 1,
+        name: normalized.name,
+        purpose: normalized.purpose,
+        inject: normalized.enabled,
+        keywordMode: normalized.keywordMode,
+        keywords: splitKeywords(normalized.keywords),
+        instruction: splitLinesForJson(normalized.instruction),
+        revealInstruction: normalized.exposeInstruction,
+        content: splitLinesForJson(normalized.content),
+    };
+}
+
+function importFieldFromJson(field = {}) {
+    const enabled = hasOwn(field, 'inject')
+        ? Boolean(field.inject)
+        : field.enabled !== false;
+
+    return normalizeField({
+        id: makeId(),
+        enabled,
+        name: String(field.name ?? ''),
+        purpose: String(field.purpose ?? field.name ?? ''),
+        instruction: joinLinesFromJson(field.instruction || DEFAULT_FIELD_INSTRUCTION),
+        exposeInstruction: Boolean(field.revealInstruction ?? field.exposeInstruction),
+        keywords: Array.isArray(field.keywords)
+            ? field.keywords.map((keyword) => String(keyword ?? '')).join('\n')
+            : String(field.keywords ?? ''),
+        keywordMode: normalizeKeywordMode(field.keywordMode),
+        content: joinLinesFromJson(field.content),
+    });
+}
+
 // -----------------------------------------------------------------------------
 // Field and State Model - State Status Checks
 // -----------------------------------------------------------------------------
@@ -572,6 +809,7 @@ function getComparableField(field) {
         instruction: normalized.instruction,
         exposeInstruction: normalized.exposeInstruction,
         keywords: normalized.keywords,
+        keywordMode: normalized.keywordMode,
         content: normalized.content,
     };
 }
@@ -714,34 +952,85 @@ function updateState(mutator, { rerender = false, syncPromptManager = false } = 
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// Current Input Tracking - Snapshot Management
+// Last User Message Tracking - Message Text Extraction
 // -----------------------------------------------------------------------------
 
-function rememberCurrentInput() {
-    const currentInput = String($('#send_textarea').val() || '').trim();
-
-    if (currentInput) {
-        pendingInputSnapshot = currentInput;
+function getChatMessageText(message) {
+    if (!message || typeof message !== 'object') {
+        return '';
     }
+
+    const candidates = [
+        message.mes,
+        message.message,
+        message.content,
+        message.text,
+        message.msg,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) {
+            return candidate.trim();
+        }
+    }
+
+    return '';
 }
 
-function clearPendingInputSnapshot() {
-    pendingInputSnapshot = '';
+function isUserChatMessage(message) {
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+
+    if (message.is_system || message.system || message.is_narrator) {
+        return false;
+    }
+
+    if (message.is_user === true) {
+        return true;
+    }
+
+    if (String(message.role || '').toLowerCase() === 'user') {
+        return true;
+    }
+
+    const ctx = getContext();
+    const userName = String(ctx?.name1 || '').trim();
+
+    if (userName && String(message.name || '').trim() === userName) {
+        return true;
+    }
+
+    return false;
+}
+
+function getLastUserMessageText() {
+    const ctx = getContext();
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+        const message = chat[index];
+
+        if (!isUserChatMessage(message)) {
+            continue;
+        }
+
+        const text = getChatMessageText(message);
+
+        if (text) {
+            return text;
+        }
+    }
+
+    return '';
 }
 
 // -----------------------------------------------------------------------------
-// Current Input Tracking - Trigger Text
+// Last User Message Tracking - Trigger Text
 // -----------------------------------------------------------------------------
 
 function buildScanText() {
-    const currentInput = String($('#send_textarea').val() || '').trim();
-
-    if (currentInput) {
-        pendingInputSnapshot = currentInput;
-        return currentInput.toLowerCase();
-    }
-
-    return String(pendingInputSnapshot || '').trim().toLowerCase();
+    return getLastUserMessageText().toLowerCase();
 }
 
 // ============================================================================
@@ -780,7 +1069,13 @@ function fieldMatches(field, scanText) {
         return true;
     }
 
-    return keywords.some((keyword) => scanText.includes(keyword.toLowerCase()));
+    const loweredKeywords = keywords.map((keyword) => keyword.toLowerCase());
+
+    if (normalized.keywordMode === KEYWORD_MODE.ALL) {
+        return loweredKeywords.every((keyword) => scanText.includes(keyword));
+    }
+
+    return loweredKeywords.some((keyword) => scanText.includes(keyword));
 }
 
 // -----------------------------------------------------------------------------
@@ -843,10 +1138,6 @@ function buildReplacementPrompt(characterId = getActiveCharacterId()) {
         characterId,
         activeFields.map(formatFieldForPrompt).join('\n\n'),
     );
-}
-
-function getNativeDescriptionForCharacter(character) {
-    return String(character?.description ?? character?.data?.description ?? '').trim();
 }
 
 function buildAspectEvolutiaMacroValue() {
@@ -1182,6 +1473,351 @@ async function updateTokenEstimate() {
 }
 
 // ============================================================================
+// Section 12. Import / Export
+// ============================================================================
+// Purpose:
+// - Own Import and Export menu actions for Dynamic Fields.
+// - This section must NOT alter native Description or native Personality.
+// ============================================================================
+
+// -----------------------------------------------------------------------------
+// Import / Export - Dynamic Field Payload Handling
+// -----------------------------------------------------------------------------
+
+function buildDynamicFieldsExportPayload(characterId = getActiveCharacterId()) {
+    const state = readState(characterId);
+
+    return {
+        fields: state.fields.map(exportFieldForJson),
+    };
+}
+
+function getFieldsFromDynamicFieldsPayload(payload) {
+    const source = typeof payload === 'string' ? JSON.parse(payload) : payload;
+
+    if (Array.isArray(source)) {
+        return source.map(importFieldFromJson);
+    }
+
+    if (!source || typeof source !== 'object') {
+        return [];
+    }
+
+    if (Array.isArray(source.fields)) {
+        return source.fields.map(importFieldFromJson);
+    }
+
+    const extensionState =
+        source?.data?.extensions?.[MODULE_NAME] ??
+        source?.extensions?.[MODULE_NAME] ??
+        source?.character?.data?.extensions?.[MODULE_NAME];
+
+    if (extensionState?.fields && Array.isArray(extensionState.fields)) {
+        return extensionState.fields.map(importFieldFromJson);
+    }
+
+    return [];
+}
+
+function appendImportedFieldsToActiveCharacter(fields, successMessage) {
+    const characterId = getActiveCharacterId();
+
+    if (characterId === undefined) {
+        notify('warning', 'Select a character before importing Dynamic Fields.');
+        return;
+    }
+
+    const normalizedFields = Array.isArray(fields)
+        ? fields.map(normalizeField).filter((field) => field.content.trim() || field.name.trim())
+        : [];
+
+    if (!normalizedFields.length) {
+        notify('warning', 'No Dynamic Fields were found to import.');
+        return;
+    }
+
+    updateState((state) => {
+        const importedFields = prepareImportedFields(normalizedFields, state.fields);
+        state.fields.push(...importedFields);
+    }, { rerender: true });
+
+    notify('success', successMessage || `Imported ${normalizedFields.length} Dynamic Field(s).`);
+}
+
+// -----------------------------------------------------------------------------
+// Import / Export - Native Description / Personality Import
+// -----------------------------------------------------------------------------
+
+function isLikelyNativeImportHeadingName(candidate, isStrongSyntax = false) {
+    const text = String(candidate || '').trim();
+
+    if (!text || text.length > 60) {
+        return false;
+    }
+
+    if (/[.!?]$/.test(text)) {
+        return false;
+    }
+
+    if (!/^[A-Za-z0-9][A-Za-z0-9\s/&'’()_-]*$/.test(text)) {
+        return false;
+    }
+
+    const key = normalizeHeadingKey(text);
+
+    if (NATIVE_IMPORT_HEADINGS.has(key)) {
+        return true;
+    }
+
+    const wordCount = key.split(/\s+/).filter(Boolean).length;
+
+    return isStrongSyntax && wordCount >= 1 && wordCount <= 5;
+}
+
+function parseNativeHeadingLine(line) {
+    const text = String(line || '').trim();
+
+    if (!text) {
+        return null;
+    }
+
+    let match = text.match(/^#{1,6}\s+(.+?)\s*$/);
+
+    if (match && isLikelyNativeImportHeadingName(match[1], true)) {
+        return titleCase(match[1]);
+    }
+
+    match = text.match(/^\[\s*([^\[\]]{1,60})\s*\]$/);
+
+    if (match && isLikelyNativeImportHeadingName(match[1], true)) {
+        return titleCase(match[1]);
+    }
+
+    match = text.match(/^<\s*([^<>]{1,60})\s*>$/);
+
+    if (match && isLikelyNativeImportHeadingName(match[1], true)) {
+        return titleCase(match[1]);
+    }
+
+    match = text.match(/^([A-Za-z0-9][A-Za-z0-9\s/&'’()_-]{0,59})\s*(?::|-|—)\s*$/);
+
+    if (match && isLikelyNativeImportHeadingName(match[1], false)) {
+        return titleCase(match[1]);
+    }
+
+    return null;
+}
+
+function parseHeaderedNativeSections(text) {
+    const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    const sections = [];
+    let currentSection = null;
+
+    for (const line of lines) {
+        const heading = parseNativeHeadingLine(line);
+
+        if (heading) {
+            if (currentSection) {
+                const content = currentSection.contentLines.join('\n').trim();
+
+                if (content) {
+                    sections.push({
+                        name: currentSection.name,
+                        content,
+                    });
+                }
+            }
+
+            currentSection = {
+                name: heading,
+                contentLines: [],
+            };
+
+            continue;
+        }
+
+        if (currentSection) {
+            currentSection.contentLines.push(line);
+        }
+    }
+
+    if (currentSection) {
+        const content = currentSection.contentLines.join('\n').trim();
+
+        if (content) {
+            sections.push({
+                name: currentSection.name,
+                content,
+            });
+        }
+    }
+
+    return sections;
+}
+
+function createFieldFromNativeImport(name, content) {
+    return normalizeField({
+        name,
+        purpose: name,
+        instruction: DEFAULT_FIELD_INSTRUCTION,
+        exposeInstruction: false,
+        keywords: '',
+        keywordMode: KEYWORD_MODE.ALL,
+        content,
+        enabled: true,
+    });
+}
+
+function buildNativeFieldImportsFromCharacter(character) {
+    const description = getNativeDescriptionForCharacter(character);
+    const personality = getNativePersonalityForCharacter(character);
+    const importedFields = [];
+
+    if (description) {
+        const descriptionSections = parseHeaderedNativeSections(description);
+        const shouldSkipDescriptionPersonality = Boolean(personality.trim());
+
+        if (descriptionSections.length) {
+            for (const section of descriptionSections) {
+                if (shouldSkipDescriptionPersonality && normalizeHeadingKey(section.name) === 'personality') {
+                    continue;
+                }
+
+                importedFields.push(createFieldFromNativeImport(section.name, section.content));
+            }
+        } else {
+            importedFields.push(createFieldFromNativeImport('Background', description));
+        }
+    }
+
+    if (personality) {
+        importedFields.push(createFieldFromNativeImport('Personality', personality));
+    }
+
+    return importedFields;
+}
+
+// -----------------------------------------------------------------------------
+// Import / Export - Import Actions
+// -----------------------------------------------------------------------------
+
+function importDynamicFieldsFromCharacterCardFile() {
+    $(`#${UI.CHARACTER_CARD_IMPORT_FILE_ID}`).val('').trigger('click');
+}
+
+function importDynamicFieldsFromFileJson() {
+    $(`#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`).val('').trigger('click');
+}
+
+async function handleCharacterCardImportFileSelected(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+        return;
+    }
+
+    try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        const fields = getFieldsFromDynamicFieldsPayload(payload);
+
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from character card.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to import character card Dynamic Fields:`, error);
+        notify('error', 'Failed to import Dynamic Fields from character card JSON.');
+    } finally {
+        $(`#${UI.CHARACTER_CARD_IMPORT_FILE_ID}`).val('');
+    }
+}
+
+async function handleDynamicFieldsImportFileSelected(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+        return;
+    }
+
+    try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        const fields = getFieldsFromDynamicFieldsPayload(payload);
+
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from JSON file.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to import Dynamic Fields JSON file:`, error);
+        notify('error', 'Failed to import Dynamic Fields from JSON file.');
+    } finally {
+        $(`#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`).val('');
+    }
+}
+
+function importDynamicFieldsFromNativeFields() {
+    const characterId = getActiveCharacterId();
+    const character = getCharacter(characterId);
+
+    if (!character) {
+        notify('warning', 'Select a character before importing native fields.');
+        return;
+    }
+
+    const importedFields = buildNativeFieldImportsFromCharacter(character);
+
+    appendImportedFieldsToActiveCharacter(
+        importedFields,
+        `Imported ${importedFields.length} Dynamic Field(s) from native fields.`,
+    );
+}
+
+async function importDynamicFieldsFromClipboardJson() {
+    try {
+        const text = await readTextFromClipboard();
+        const fields = getFieldsFromDynamicFieldsPayload(text);
+
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from clipboard JSON.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to import clipboard Dynamic Fields:`, error);
+        notify('error', 'Failed to import Dynamic Fields from clipboard JSON.');
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Import / Export - Export Actions
+// -----------------------------------------------------------------------------
+
+function exportDynamicFieldsToFileJson() {
+    const characterId = getActiveCharacterId();
+
+    if (characterId === undefined) {
+        notify('warning', 'Select a character before exporting Dynamic Fields.');
+        return;
+    }
+
+    const characterName = getCharacterName(characterId);
+    const payload = buildDynamicFieldsExportPayload(characterId);
+
+    downloadJsonFile(`${sanitizeFilename(characterName)}_aspect_evolutia_dynamic_fields.json`, payload);
+    notify('success', 'Exported Dynamic Fields JSON file.');
+}
+
+async function exportDynamicFieldsToClipboardJson() {
+    const characterId = getActiveCharacterId();
+
+    if (characterId === undefined) {
+        notify('warning', 'Select a character before copying Dynamic Fields.');
+        return;
+    }
+
+    try {
+        const payload = buildDynamicFieldsExportPayload(characterId);
+        await copyTextToClipboard(JSON.stringify(payload, null, 2));
+        notify('success', 'Copied Dynamic Fields JSON to clipboard.');
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to copy Dynamic Fields JSON:`, error);
+        notify('error', 'Failed to copy Dynamic Fields JSON to clipboard.');
+    }
+}
+
+// ============================================================================
 // Section 12A. Extensions Drawer Settings
 // ============================================================================
 // Purpose:
@@ -1356,6 +1992,7 @@ async function resetAllCharactersToOutOfBox() {
 
     stateCache.clear();
     restoreSuppressedDescriptions();
+    await syncPromptManagerWithActiveState();
 
     renderPanel();
     applyUiVisibility();
@@ -1538,7 +2175,7 @@ function bindExtensionSettingsEvents() {
 }
 
 // ============================================================================
-// Section 12. User Interface Rendering
+// Section 13. User Interface Rendering
 // ============================================================================
 // Purpose:
 // - Own CSS, DOM mounting, field-list rendering, and visibility rules.
@@ -1652,11 +2289,36 @@ function ensureStyles() {
         }
 
         #${UI.BAR_ID} .dsf-left-controls,
-        #${UI.BAR_ID} .dsf-right-controls {
+        #${UI.BAR_ID} .dsf-right-controls,
+        #${UI.BAR_ID} .dsf-bottom-controls {
             display: inline-flex;
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
+        }
+
+        #${UI.BAR_ID} .dsf-right-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex: 1 1 auto;
+            margin-left: auto;
+        }
+
+        #${UI.BAR_ID} .dsf-top-action-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            width: 100%;
+        }
+
+        #${UI.DELETE_ALL_TOP_ID} {
+            margin-right: auto;
+        }
+
+        #${UI.ADD_TOP_ID} {
+            margin-left: auto;
         }
 
         #${UI.BAR_ID} label {
@@ -1666,7 +2328,21 @@ function ensureStyles() {
             margin: 0;
         }
 
-        #${UI.ADD_ID} {
+        #${UI.BOTTOM_ACTIONS_ID} {
+            display: none;
+            align-items: center;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+            gap: 8px;
+            width: 100%;
+            margin-top: 4px;
+        }
+
+        #${UI.DELETE_ALL_TOP_ID},
+        #${UI.ADD_TOP_ID},
+        #${UI.ADD_BOTTOM_ID},
+        #${UI.IMPORT_ID},
+        #${UI.EXPORT_ID} {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -1674,6 +2350,16 @@ function ensureStyles() {
             width: auto;
             min-width: max-content;
             flex: 0 0 auto;
+        }
+
+        #${UI.DELETE_ALL_TOP_ID}:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            filter: grayscale(0.35);
+        }
+
+        #${UI.ADD_BOTTOM_ID} {
+            margin-left: auto;
         }
 
         #${UI.PANEL_ID} {
@@ -1688,6 +2374,11 @@ function ensureStyles() {
             background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));
         }
 
+        #${UI.PANEL_ID} .dsf-field.dsf-dragging {
+            opacity: 0.55;
+            outline: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,0.35));
+        }
+
         #${UI.PANEL_ID} .dsf-field:first-child {
             margin-top: 0;
         }
@@ -1696,10 +2387,83 @@ function ensureStyles() {
             margin-bottom: 0;
         }
 
+        #${UI.PANEL_ID} .dsf-field-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 6px;
+            width: 100%;
+        }
+
+        #${UI.PANEL_ID} .dsf-field-order-wrap {
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            width: 100%;
+            opacity: 0.9;
+            font-size: 0.9em;
+        }
+
+        #${UI.PANEL_ID} .dsf-position-control {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            margin-left: auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-field-order {
+            width: auto;
+            min-width: 2ch;
+            max-width: 10ch;
+            text-align: right;
+            box-sizing: content-box;
+            padding-left: 4px;
+            padding-right: 4px;
+        }
+
+        #${UI.PANEL_ID} .dsf-drag-handle {
+            cursor: grab;
+            width: auto;
+            min-width: max-content;
+            white-space: nowrap;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            margin-right: auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-drag-handle:active {
+            cursor: grabbing;
+        }
+
         #${UI.PANEL_ID} .dsf-label {
             font-size: 0.85em;
             opacity: 0.85;
             margin: 6px 0 2px;
+        }
+
+        #${UI.PANEL_ID} .dsf-keyword-mode-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 4px;
+        }
+
+        #${UI.PANEL_ID} .dsf-keyword-mode-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            font-size: 0.85em;
+            opacity: 0.9;
+        }
+
+        #${UI.PANEL_ID} .dsf-keyword-mode {
+            width: auto;
+            min-width: 5.5em;
         }
 
         #${UI.PANEL_ID} .dsf-reveal-instruction-row {
@@ -1815,6 +2579,37 @@ function ensureStyles() {
             margin-left: auto;
         }
 
+        #${UI.BAR_ID} .dsf-menu-wrap {
+            position: relative;
+            display: inline-flex;
+        }
+
+        #${UI.BAR_ID} .dsf-menu {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: calc(100% + 4px);
+            z-index: 10000;
+            min-width: 190px;
+            padding: 6px;
+            border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.25));
+            border-radius: 8px;
+            background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor, #1e1e1e));
+            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+        }
+
+        #${UI.BAR_ID} .dsf-menu.dsf-menu-open {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        #${UI.BAR_ID} .dsf-menu button {
+            justify-content: flex-start;
+            width: 100%;
+            white-space: nowrap;
+        }
+
         #${UI.SETTINGS_ID} .dsf-settings-box {
             border: 1px solid #000;
             border-radius: 10px;
@@ -1892,12 +2687,45 @@ function mountUi() {
                         </label>
                     </div>
 
-                    <div class="dsf-right-controls">
-                        <button id="${UI.ADD_ID}" type="button" class="menu_button">Add Field</button>
+                    <div class="dsf-top-action-row">
+                        <button
+                            id="${UI.DELETE_ALL_TOP_ID}"
+                            type="button"
+                            class="menu_button danger_button"
+                            title="Delete all Dynamic Fields for this character."
+                        >
+                            Delete All
+                        </button>
+
+                        <button id="${UI.ADD_TOP_ID}" type="button" class="menu_button">Add Field</button>
                     </div>
                 </div>
 
                 <div id="${UI.PANEL_ID}"></div>
+
+                <div id="${UI.BOTTOM_ACTIONS_ID}">
+                    <div class="dsf-menu-wrap">
+                        <button id="${UI.IMPORT_ID}" type="button" class="menu_button" title="Import Dynamic Fields.">Import</button>
+                        <div id="${UI.IMPORT_MENU_ID}" class="dsf-menu">
+                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.CHARACTER_CARD}">Character Card</button>
+                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.NATIVE_FIELDS}">SillyTavern Fields</button>
+                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.FILE_JSON}">File (JSON)</button>
+                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.CLIPBOARD_JSON}">Clipboard (JSON)</button>
+                        </div>
+                    </div>
+
+                    <div class="dsf-menu-wrap">
+                        <button id="${UI.EXPORT_ID}" type="button" class="menu_button" title="Export Dynamic Fields.">Export</button>
+                        <div id="${UI.EXPORT_MENU_ID}" class="dsf-menu">
+                            <button type="button" class="menu_button" data-dsf-export="${EXPORT_TARGET.FILE_JSON}">File (JSON)</button>
+                            <button type="button" class="menu_button" data-dsf-export="${EXPORT_TARGET.CLIPBOARD_JSON}">Clipboard (JSON)</button>
+                        </div>
+                    </div>
+
+                    <button id="${UI.ADD_BOTTOM_ID}" type="button" class="menu_button">Add Field</button>
+                    <input id="${UI.CHARACTER_CARD_IMPORT_FILE_ID}" type="file" accept=".json,application/json" hidden>
+                    <input id="${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}" type="file" accept=".json,application/json" hidden>
+                </div>
 
                 <div id="${UI.TOKEN_ROW_ID}">
                     <span id="${UI.TOKEN_ID}" aria-live="polite"></span>
@@ -1923,11 +2751,25 @@ function applyUiVisibility() {
     const state = readState(characterId);
     const $description = getDescriptionTextarea();
     const $panel = $(`#${UI.PANEL_ID}`);
+    const hasFields = state.fields.length > 0;
 
     $(`#${UI.SWAP_ID}`).prop('checked', state.swapEnabled);
     $(`#${UI.WI_SCAN_ID}`).prop('checked', state.allowWorldInfoScan);
 
-    $(`#${UI.ADD_ID}`).toggle(state.swapEnabled);
+    $(`#${UI.DELETE_ALL_TOP_ID}`)
+        .toggle(state.swapEnabled)
+        .prop('disabled', !hasFields)
+        .toggleClass('disabled', !hasFields)
+        .attr(
+            'title',
+            hasFields
+                ? 'Delete all Dynamic Fields for this character.'
+                : 'There are no Dynamic Fields to delete.',
+        );
+
+    $(`#${UI.ADD_TOP_ID}`).toggle(state.swapEnabled);
+    $(`#${UI.BOTTOM_ACTIONS_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
+    $(`#${UI.ADD_BOTTOM_ID}`).toggle(state.swapEnabled);
     $(`#${UI.WI_SCAN_WRAP_ID}`).toggle(state.swapEnabled);
     $(`#${UI.TOKEN_ROW_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
 
@@ -1950,7 +2792,7 @@ function renderPanel() {
     }
 
     const fieldsHtml = state.fields.length
-        ? state.fields.map(renderFieldHtml).join('')
+        ? state.fields.map((field, index) => renderFieldHtml(field, index)).join('')
         : '<div class="dsf-empty">No dynamic fields yet.</div>';
 
     $panel.html(`
@@ -1963,8 +2805,9 @@ function renderPanel() {
     updateTokenEstimate();
 }
 
-function renderFieldHtml(field) {
+function renderFieldHtml(field, index = 0) {
     const normalized = normalizeField(field);
+    const keywordMode = normalizeKeywordMode(normalized.keywordMode);
     const instructionEditorHtml = normalized.exposeInstruction
         ? `
             <div class="dsf-instruction-editor">
@@ -1980,6 +2823,23 @@ function renderFieldHtml(field) {
 
     return `
         <div class="dsf-field" data-field-id="${escapeAttribute(normalized.id)}">
+            <div class="dsf-field-top-row">
+                <div class="dsf-field-order-wrap">
+                    <button type="button" class="menu_button dsf-drag-handle" title="Hold and drag to reorder">↕</button>
+                    <label class="dsf-position-control">
+                        <input
+                            class="text_pole dsf-field-order"
+                            type="text"
+                            inputmode="numeric"
+                            pattern="[0-9]*"
+                            value="${index + 1}"
+                            style="width: ${getPositionInputWidth(index + 1)};"
+                        >
+                        <span>Position</span>
+                    </label>
+                </div>
+            </div>
+
             <div class="dsf-label">Field Name</div>
             <input class="text_pole dsf-field-name" type="text" placeholder="Example: Background" value="${escapeAttribute(normalized.name)}">
 
@@ -1997,6 +2857,15 @@ function renderFieldHtml(field) {
 
             <div class="dsf-label">Keyword Triggers (Separate by comma, semicolon, or newline).</div>
             <textarea class="text_pole dsf-keywords" placeholder="Example: Intro, Pre-Reveal, EVOLUTION_STAGE: Pre-War Arc">${escapeTextarea(normalized.keywords)}</textarea>
+            <div class="dsf-keyword-mode-row">
+                <label class="dsf-keyword-mode-wrap" title="Any means at least one trigger must match. All means every trigger must match.">
+                    <span>Match</span>
+                    <select class="text_pole dsf-keyword-mode">
+                        <option value="${KEYWORD_MODE.ANY}" ${keywordMode === KEYWORD_MODE.ANY ? 'selected' : ''}>Any</option>
+                        <option value="${KEYWORD_MODE.ALL}" ${keywordMode === KEYWORD_MODE.ALL ? 'selected' : ''}>All</option>
+                    </select>
+                </label>
+            </div>
 
             <div class="dsf-label">Content (Leave empty to prevent injection).</div>
             <textarea class="text_pole dsf-content" placeholder="">${escapeTextarea(normalized.content)}</textarea>
@@ -2019,7 +2888,7 @@ function renderFieldHtml(field) {
 }
 
 // ============================================================================
-// Section 13. User Interface Events
+// Section 14. User Interface Events
 // ============================================================================
 // Purpose:
 // - Own DOM event binding for controls and field editors.
@@ -2029,6 +2898,38 @@ function renderFieldHtml(field) {
 // -----------------------------------------------------------------------------
 // User Interface Events - Top Bar Controls
 // -----------------------------------------------------------------------------
+
+function deleteAllDynamicFieldsForCurrentCharacter() {
+    const characterId = getActiveCharacterId();
+
+    if (characterId === undefined) {
+        notify('warning', 'Select a character before deleting Dynamic Fields.');
+        return;
+    }
+
+    const state = readState(characterId);
+
+    if (!state.fields.length) {
+        notify('info', 'There are no Dynamic Fields to delete.');
+        applyUiVisibility();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Delete all Dynamic Fields for this character?\n\n' +
+        'This only affects Aspect: Evolutia Dynamic Fields. Native SillyTavern fields are not changed.',
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    updateState((nextState) => {
+        nextState.fields = [];
+    }, { rerender: true });
+
+    notify('success', 'Deleted all Dynamic Fields for this character.');
+}
 
 function bindUiHandlers() {
     $(document)
@@ -2040,8 +2941,12 @@ function bindUiHandlers() {
         });
 
     $(document)
-        .off(`click.${MODULE_NAME}`, `#${UI.ADD_ID}`)
-        .on(`click.${MODULE_NAME}`, `#${UI.ADD_ID}`, function onAddField() {
+        .off(`click.${MODULE_NAME}`, `#${UI.DELETE_ALL_TOP_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.DELETE_ALL_TOP_ID}`, deleteAllDynamicFieldsForCurrentCharacter);
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.ADD_TOP_ID}, #${UI.ADD_BOTTOM_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.ADD_TOP_ID}, #${UI.ADD_BOTTOM_ID}`, function onAddField() {
             updateState((state) => {
                 state.fields.push(normalizeField({
                     name: '',
@@ -2049,6 +2954,7 @@ function bindUiHandlers() {
                     instruction: DEFAULT_FIELD_INSTRUCTION,
                     exposeInstruction: false,
                     keywords: '',
+                    keywordMode: KEYWORD_MODE.ALL,
                     content: '',
                     enabled: true,
                 }));
@@ -2063,22 +2969,10 @@ function bindUiHandlers() {
             }, { rerender: false });
         });
 
-    bindInputTrackingHandlers();
     bindFieldEditHandlers();
     bindFieldActionHandlers();
-}
-
-// -----------------------------------------------------------------------------
-// User Interface Events - Current Input Tracking
-// -----------------------------------------------------------------------------
-
-function bindInputTrackingHandlers() {
-    $(document)
-        .off(`input.${MODULE_NAME} change.${MODULE_NAME} keyup.${MODULE_NAME}`, '#send_textarea')
-        .on(`input.${MODULE_NAME} change.${MODULE_NAME} keyup.${MODULE_NAME}`, '#send_textarea', () => {
-            rememberCurrentInput();
-            updateTokenEstimate();
-        });
+    bindFieldReorderHandlers();
+    bindImportExportHandlers();
 }
 
 // -----------------------------------------------------------------------------
@@ -2142,6 +3036,17 @@ function bindFieldEditHandlers() {
             updateState((state) => {
                 const field = findField(state, fieldId);
                 if (field) field.instruction = this.value;
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-keyword-mode')
+        .on(`change.${MODULE_NAME}`, '.dsf-keyword-mode', function onKeywordModeChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.keywordMode = normalizeKeywordMode(this.value);
             }, { rerender: false });
         });
 
@@ -2214,8 +3119,358 @@ function bindFieldActionHandlers() {
         });
 }
 
+// -----------------------------------------------------------------------------
+// User Interface Events - Field Reordering
+// -----------------------------------------------------------------------------
+
+function moveFieldToOrder(state, fieldId, requestedOrder) {
+    const currentIndex = state.fields.findIndex((field) => field.id === fieldId);
+
+    if (currentIndex === -1) {
+        return;
+    }
+
+    const boundedOrder = Math.max(1, Math.min(Number(requestedOrder) || 1, state.fields.length));
+    const [field] = state.fields.splice(currentIndex, 1);
+
+    state.fields.splice(boundedOrder - 1, 0, field);
+}
+
+function commitDomFieldOrder() {
+    const orderedIds = $(`#${UI.PANEL_ID} .dsf-field`)
+        .map(function mapFieldId() {
+            return String($(this).data('field-id') || '');
+        })
+        .get()
+        .filter(Boolean);
+
+    if (!orderedIds.length) {
+        return;
+    }
+
+    updateState((state) => {
+        const fieldsById = new Map(state.fields.map((field) => [String(field.id), field]));
+        const orderedFields = orderedIds
+            .map((fieldId) => fieldsById.get(String(fieldId)))
+            .filter(Boolean);
+
+        if (orderedFields.length === state.fields.length) {
+            state.fields = orderedFields;
+        }
+    }, { rerender: true });
+}
+
+function getFieldDragScrollParent(element) {
+    let parent = element?.parentElement;
+
+    while (parent && parent !== document.body && parent !== document.documentElement) {
+        const style = getComputedStyle(parent);
+        const overflowY = `${style.overflowY} ${style.overflow}`;
+
+        if (/(auto|scroll)/i.test(overflowY) && parent.scrollHeight > parent.clientHeight) {
+            return parent;
+        }
+
+        parent = parent.parentElement;
+    }
+
+    return document.scrollingElement || document.documentElement;
+}
+
+function getFieldDragScrollBounds(scrollElement) {
+    if (
+        scrollElement === document.scrollingElement ||
+        scrollElement === document.documentElement ||
+        scrollElement === document.body
+    ) {
+        return {
+            top: 0,
+            bottom: window.innerHeight,
+        };
+    }
+
+    const rect = scrollElement.getBoundingClientRect();
+
+    return {
+        top: rect.top,
+        bottom: rect.bottom,
+    };
+}
+
+function getFieldDragAutoScrollAmount(scrollElement, clientY) {
+    const bounds = getFieldDragScrollBounds(scrollElement);
+    const topDistance = clientY - bounds.top;
+    const bottomDistance = bounds.bottom - clientY;
+
+    if (topDistance >= 0 && topDistance < FIELD_DRAG_AUTOSCROLL_MARGIN) {
+        const strength = 1 - (topDistance / FIELD_DRAG_AUTOSCROLL_MARGIN);
+        return -Math.ceil(strength * FIELD_DRAG_AUTOSCROLL_MAX_SPEED);
+    }
+
+    if (bottomDistance >= 0 && bottomDistance < FIELD_DRAG_AUTOSCROLL_MARGIN) {
+        const strength = 1 - (bottomDistance / FIELD_DRAG_AUTOSCROLL_MARGIN);
+        return Math.ceil(strength * FIELD_DRAG_AUTOSCROLL_MAX_SPEED);
+    }
+
+    return 0;
+}
+
+function scrollFieldDragContainer(scrollElement, amount) {
+    if (!amount) {
+        return;
+    }
+
+    if (
+        scrollElement === document.scrollingElement ||
+        scrollElement === document.documentElement ||
+        scrollElement === document.body
+    ) {
+        window.scrollBy(0, amount);
+        return;
+    }
+
+    scrollElement.scrollTop += amount;
+}
+
+function moveDraggedFieldAtPoint(clientX, clientY) {
+    if (!fieldPointerDrag?.fieldElement) {
+        return;
+    }
+
+    const elementAtPoint = document.elementFromPoint(clientX, clientY);
+    const targetField = elementAtPoint?.closest?.('.dsf-field');
+
+    if (!targetField || targetField === fieldPointerDrag.fieldElement) {
+        return;
+    }
+
+    const rect = targetField.getBoundingClientRect();
+    const placeAfter = clientY > rect.top + rect.height / 2;
+
+    if (placeAfter) {
+        targetField.after(fieldPointerDrag.fieldElement);
+    } else {
+        targetField.before(fieldPointerDrag.fieldElement);
+    }
+}
+
+function startFieldDragAutoScroll() {
+    if (fieldDragAutoScrollFrame) {
+        return;
+    }
+
+    const tick = () => {
+        if (!fieldPointerDrag) {
+            fieldDragAutoScrollFrame = null;
+            return;
+        }
+
+        const amount = getFieldDragAutoScrollAmount(
+            fieldPointerDrag.scrollElement,
+            fieldPointerDrag.lastClientY,
+        );
+
+        if (amount) {
+            scrollFieldDragContainer(fieldPointerDrag.scrollElement, amount);
+            moveDraggedFieldAtPoint(fieldPointerDrag.lastClientX, fieldPointerDrag.lastClientY);
+        }
+
+        fieldDragAutoScrollFrame = requestAnimationFrame(tick);
+    };
+
+    fieldDragAutoScrollFrame = requestAnimationFrame(tick);
+}
+
+function stopFieldDragAutoScroll() {
+    if (fieldDragAutoScrollFrame) {
+        cancelAnimationFrame(fieldDragAutoScrollFrame);
+        fieldDragAutoScrollFrame = null;
+    }
+}
+
+function bindFieldReorderHandlers() {
+    $(document)
+        .off(`input.${MODULE_NAME}`, '.dsf-field-order')
+        .on(`input.${MODULE_NAME}`, '.dsf-field-order', function onPositionInputChanged() {
+            this.value = String(this.value || '').replace(/[^\d]/g, '');
+            syncPositionInputWidth(this);
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-field-order')
+        .on(`change.${MODULE_NAME}`, '.dsf-field-order', function onOrderChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const cleanedValue = String(this.value || '').replace(/[^\d]/g, '');
+            const requestedOrder = Number(cleanedValue || 1);
+
+            this.value = String(requestedOrder);
+            syncPositionInputWidth(this);
+
+            updateState((state) => {
+                moveFieldToOrder(state, fieldId, requestedOrder);
+            }, { rerender: true });
+        });
+
+    $(document)
+        .off(`pointerdown.${MODULE_NAME}`, '.dsf-drag-handle')
+        .on(`pointerdown.${MODULE_NAME}`, '.dsf-drag-handle', function onPointerDown(event) {
+            const originalEvent = event.originalEvent;
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.data('field-id') || '');
+
+            if (!fieldId || !originalEvent) {
+                return;
+            }
+
+            event.preventDefault();
+
+            fieldPointerDrag = {
+                fieldId,
+                pointerId: originalEvent.pointerId,
+                fieldElement: $field[0],
+                scrollElement: getFieldDragScrollParent($field[0]),
+                lastClientX: originalEvent.clientX,
+                lastClientY: originalEvent.clientY,
+            };
+
+            $field.addClass('dsf-dragging');
+
+            try {
+                this.setPointerCapture?.(originalEvent.pointerId);
+            } catch {
+                // Some mobile browsers do not allow capture from delegated handlers.
+            }
+
+            startFieldDragAutoScroll();
+        });
+
+    $(document)
+        .off(`pointermove.${MODULE_NAME}`)
+        .on(`pointermove.${MODULE_NAME}`, function onPointerMove(event) {
+            if (!fieldPointerDrag) {
+                return;
+            }
+
+            const originalEvent = event.originalEvent;
+
+            if (!originalEvent || originalEvent.pointerId !== fieldPointerDrag.pointerId) {
+                return;
+            }
+
+            event.preventDefault();
+
+            fieldPointerDrag.lastClientX = originalEvent.clientX;
+            fieldPointerDrag.lastClientY = originalEvent.clientY;
+
+            moveDraggedFieldAtPoint(originalEvent.clientX, originalEvent.clientY);
+            startFieldDragAutoScroll();
+        });
+
+    $(document)
+        .off(`pointerup.${MODULE_NAME} pointercancel.${MODULE_NAME}`)
+        .on(`pointerup.${MODULE_NAME} pointercancel.${MODULE_NAME}`, function onPointerUp(event) {
+            if (!fieldPointerDrag) {
+                return;
+            }
+
+            const originalEvent = event.originalEvent;
+
+            if (originalEvent && originalEvent.pointerId !== fieldPointerDrag.pointerId) {
+                return;
+            }
+
+            $('.dsf-field').removeClass('dsf-dragging');
+            stopFieldDragAutoScroll();
+            fieldPointerDrag = null;
+            commitDomFieldOrder();
+        });
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Events - Import / Export Menus
+// -----------------------------------------------------------------------------
+
+function closeImportExportMenus() {
+    $(`#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`).removeClass('dsf-menu-open');
+}
+
+function toggleMenu(menuId) {
+    const $menu = $(`#${menuId}`);
+    const wasOpen = $menu.hasClass('dsf-menu-open');
+
+    closeImportExportMenus();
+
+    if (!wasOpen) {
+        $menu.addClass('dsf-menu-open');
+    }
+}
+
+function bindImportExportHandlers() {
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`, function onImportClicked(event) {
+            event.stopPropagation();
+            toggleMenu(UI.IMPORT_MENU_ID);
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.EXPORT_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.EXPORT_ID}`, function onExportClicked(event) {
+            event.stopPropagation();
+            toggleMenu(UI.EXPORT_MENU_ID);
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`, function onMenuClicked(event) {
+            event.stopPropagation();
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '[data-dsf-import]')
+        .on(`click.${MODULE_NAME}`, '[data-dsf-import]', function onImportActionClicked() {
+            const action = String($(this).data('dsf-import') || '');
+            closeImportExportMenus();
+
+            if (action === IMPORT_SOURCE.CHARACTER_CARD) {
+                importDynamicFieldsFromCharacterCardFile();
+            } else if (action === IMPORT_SOURCE.NATIVE_FIELDS) {
+                importDynamicFieldsFromNativeFields();
+            } else if (action === IMPORT_SOURCE.FILE_JSON) {
+                importDynamicFieldsFromFileJson();
+            } else if (action === IMPORT_SOURCE.CLIPBOARD_JSON) {
+                importDynamicFieldsFromClipboardJson();
+            }
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '[data-dsf-export]')
+        .on(`click.${MODULE_NAME}`, '[data-dsf-export]', function onExportActionClicked() {
+            const action = String($(this).data('dsf-export') || '');
+            closeImportExportMenus();
+
+            if (action === EXPORT_TARGET.FILE_JSON) {
+                exportDynamicFieldsToFileJson();
+            } else if (action === EXPORT_TARGET.CLIPBOARD_JSON) {
+                exportDynamicFieldsToClipboardJson();
+            }
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, `#${UI.CHARACTER_CARD_IMPORT_FILE_ID}`)
+        .on(`change.${MODULE_NAME}`, `#${UI.CHARACTER_CARD_IMPORT_FILE_ID}`, handleCharacterCardImportFileSelected);
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, `#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`)
+        .on(`change.${MODULE_NAME}`, `#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`, handleDynamicFieldsImportFileSelected);
+
+    $(document)
+        .off(`click.${MODULE_NAME}.menus`)
+        .on(`click.${MODULE_NAME}.menus`, closeImportExportMenus);
+}
+
 // ============================================================================
-// Section 14. Generation Flow
+// Section 15. Generation Flow
 // ============================================================================
 // Purpose:
 // - Own generation-time behavior needed by the Prompt Manager macro.
@@ -2228,12 +3483,6 @@ function bindFieldActionHandlers() {
 
 function onGenerationStarted(_type, options = {}) {
     currentGenerationCharacterId = getGenerationCharacterId(options);
-
-    if (currentGenerationCharacterId === undefined || currentGenerationCharacterId === null || currentGenerationCharacterId === '') {
-        return;
-    }
-
-    rememberCurrentInput();
 }
 
 // -----------------------------------------------------------------------------
@@ -2242,18 +3491,16 @@ function onGenerationStarted(_type, options = {}) {
 
 function onGenerationPromptBuilt() {
     restoreSuppressedDescriptions();
-    clearPendingInputSnapshot();
     currentGenerationCharacterId = undefined;
 }
 
 function onGenerationFinished() {
     restoreSuppressedDescriptions();
-    clearPendingInputSnapshot();
     currentGenerationCharacterId = undefined;
 }
 
 // ============================================================================
-// Section 15. SillyTavern Event Wiring
+// Section 16. SillyTavern Event Wiring
 // ============================================================================
 // Purpose:
 // - Own subscriptions to SillyTavern app, character, chat, and generation events.
@@ -2284,7 +3531,6 @@ function registerEvents() {
     eventSource.on(eventTypes.CHAT_CHANGED, () => {
         stateCache.clear();
         restoreSuppressedDescriptions();
-        clearPendingInputSnapshot();
         currentGenerationCharacterId = undefined;
         scheduleMount();
         updateSettingsActionState();
@@ -2341,7 +3587,7 @@ function registerEvents() {
 }
 
 // ============================================================================
-// Section 16. DOM Mount Observer
+// Section 17. DOM Mount Observer
 // ============================================================================
 // Purpose:
 // - Own remounting the UI when SillyTavern replaces character editor DOM.
@@ -2383,10 +3629,10 @@ function observeDom() {
 }
 
 // ============================================================================
-// Section 17. Extension Activation
+// Section 18. Extension Activation
 // ============================================================================
 // Purpose:
-// - Own one-time startup for Aspect: Exolutia.
+// - Own one-time startup for Aspect: Evolutia.
 // - Module self-boots for compatibility.
 // ============================================================================
 

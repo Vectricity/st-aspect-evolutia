@@ -1,10 +1,8 @@
-# 🚧 Work in Progress, but Functional! 🚧
-
 # Aspect: Evolutia
 
 Aspect: Evolutia is a SillyTavern extension for swapping a character card’s static Description field on-demand with organized, trigger-aware Dynamic Fields.
 
-It is designed for characters to evolve across arcs, stages, revelations, timelines, or roleplay conditions. Instead of stuffing every version of a character into the Description and asking the model ignores irrelevant information, Aspect: Evolutia lets you split character-defining information into separate fields and inject only the fields that matter.
+It is designed for characters to evolve across arcs, stages, revelations, timelines, or roleplay conditions. Instead of stuffing every version of a character into the Description and asking the model to ignore irrelevant information, Aspect: Evolutia lets you split character-defining information into separate fields and inject only the fields that matter.
 
 The goal is to make character cards cleaner, more stage-aware, and easier to maintain without permanently overwriting or deleting the original SillyTavern Description.
 
@@ -28,7 +26,7 @@ The goal is to make character cards cleaner, more stage-aware, and easier to mai
 - Supports keyword-triggered field injection
 - Treats blank keyword triggers as always eligible for injection
 - Treats blank content as non-injectable
-- Uses current unsent input for keyword trigger matching
+- Uses the latest sent user message for keyword trigger matching
 - Wraps Dynamic Fields in clear, LLM-readable bracket tags
 - Identifies the fields as applying to the assistant-written character, not the user persona
 - Automatically creates and manages an Aspect: Evolutia Prompt Manager prompt
@@ -37,6 +35,22 @@ The goal is to make character cards cleaner, more stage-aware, and easier to mai
 - Uses a custom macro to inject either:
   - Dynamic Fields when Dynamic Fields mode is enabled
   - The native Description when Dynamic Fields mode is disabled
+
+- Lets each field use Match Any or Match All keyword trigger behavior
+- Defaults new fields to Match All keyword trigger behavior
+- Lets fields be reordered by Position number or drag handle
+- Adds a Delete All button for clearing the current character’s Dynamic Fields
+- Supports importing Dynamic Fields from:
+  - Character Card
+  - SillyTavern Fields
+  - File (JSON)
+  - Clipboard (JSON)
+- Supports exporting Dynamic Fields to:
+  - File (JSON)
+  - Clipboard (JSON)
+- Imports add fields to the existing Dynamic Fields list instead of replacing it
+- Automatically renames imported duplicate field names
+
 - Keeps Prompt Manager ordering available instead of forcing extension-prompt ordering
 - Shows a Dynamic Fields token estimate while Dynamic Fields mode is active
 - Hides the standard character token counter while Dynamic Fields mode is active
@@ -63,6 +77,8 @@ Examples:
 - Faction Role
 
 Each field can be written and triggered separately, allowing the character to evolve without forcing every version of the character into the prompt at once.
+
+Fields can also be manually reordered. The Position control sets the field’s injection order, and the drag handle can be used to move fields visually.
 
 ## Keyword Triggers
 
