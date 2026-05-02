@@ -39,6 +39,26 @@ const KEYWORD_MODE = Object.freeze({
     ALL: 'all',
 });
 
+const TRIGGER_SOURCE = Object.freeze({
+    QUIET_PROMPTS: 'quiet_prompts',
+    SYSTEM_PROMPTS: 'system_prompts',
+    ASSISTANT_MESSAGES: 'assistant_messages',
+    LAST_USER_MESSAGE: 'last_user_message',
+    WORLD_INFO_LOREBOOKS: 'world_info_lorebooks',
+});
+
+const TRIGGER_SOURCE_LABELS = Object.freeze({
+    [TRIGGER_SOURCE.QUIET_PROMPTS]: 'Quiet Prompts',
+    [TRIGGER_SOURCE.SYSTEM_PROMPTS]: 'System Prompts',
+    [TRIGGER_SOURCE.ASSISTANT_MESSAGES]: 'Assistant Messages',
+    [TRIGGER_SOURCE.LAST_USER_MESSAGE]: 'Last User Message',
+    [TRIGGER_SOURCE.WORLD_INFO_LOREBOOKS]: 'World Info / Lorebooks',
+});
+
+const DEFAULT_TRIGGER_SOURCES = Object.freeze([
+    TRIGGER_SOURCE.LAST_USER_MESSAGE,
+]);
+
 const IMPORT_SOURCE = Object.freeze({
     CHARACTER_CARD: 'character_card',
     NATIVE_FIELDS: 'native_fields',
@@ -89,8 +109,6 @@ const UI = Object.freeze({
     EXPORT_MENU_ID: 'dsf_export_menu',
     CHARACTER_CARD_IMPORT_FILE_ID: 'dsf_character_card_import_file',
     DYNAMIC_FIELDS_IMPORT_FILE_ID: 'dsf_dynamic_fields_import_file',
-    WI_SCAN_ID: 'dsf_allow_wi_scan',
-    WI_SCAN_WRAP_ID: 'dsf_wi_scan_wrap',
     TOKEN_ID: 'dsf_token_estimate',
     SETTINGS_ID: 'dsf_extension_settings',
     SETTINGS_VERSION_ID: 'dsf_settings_version',
@@ -102,7 +120,6 @@ const UI = Object.freeze({
 
 const DEFAULT_STATE = Object.freeze({
     swapEnabled: false,
-    allowWorldInfoScan: false,
     initializedDefaults: false,
     fields: [],
 });
@@ -603,9 +620,13 @@ function createDefaultFields() {
             name: 'Background',
             purpose: 'Background',
             instruction: DEFAULT_FIELD_INSTRUCTION,
-            exposeInstruction: false,
-            keywords: '',
-            keywordMode: KEYWORD_MODE.ALL,
+            activatingTriggers: '',
+            enablingTriggers: '',
+            disablingTriggers: '',
+            triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+            activatingKeywordMode: KEYWORD_MODE.ALL,
+            enablingKeywordMode: KEYWORD_MODE.ALL,
+            disablingKeywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -613,9 +634,13 @@ function createDefaultFields() {
             name: 'Personality',
             purpose: 'Personality',
             instruction: DEFAULT_FIELD_INSTRUCTION,
-            exposeInstruction: false,
-            keywords: '',
-            keywordMode: KEYWORD_MODE.ALL,
+            activatingTriggers: '',
+            enablingTriggers: '',
+            disablingTriggers: '',
+            triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+            activatingKeywordMode: KEYWORD_MODE.ALL,
+            enablingKeywordMode: KEYWORD_MODE.ALL,
+            disablingKeywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -623,9 +648,13 @@ function createDefaultFields() {
             name: 'Appearance',
             purpose: 'Appearance',
             instruction: DEFAULT_FIELD_INSTRUCTION,
-            exposeInstruction: false,
-            keywords: '',
-            keywordMode: KEYWORD_MODE.ALL,
+            activatingTriggers: '',
+            enablingTriggers: '',
+            disablingTriggers: '',
+            triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+            activatingKeywordMode: KEYWORD_MODE.ALL,
+            enablingKeywordMode: KEYWORD_MODE.ALL,
+            disablingKeywordMode: KEYWORD_MODE.ALL,
             content: '',
             enabled: true,
         }),
@@ -635,7 +664,6 @@ function createDefaultFields() {
 function createOutOfBoxState() {
     return normalizeState({
         swapEnabled: false,
-        allowWorldInfoScan: false,
         initializedDefaults: true,
         fields: createDefaultFields(),
     });
@@ -664,16 +692,50 @@ function normalizeKeywordMode(rawMode) {
     return rawMode === KEYWORD_MODE.ANY ? KEYWORD_MODE.ANY : KEYWORD_MODE.ALL;
 }
 
+function normalizeTriggerSources(rawSources) {
+    const validSources = new Set(Object.values(TRIGGER_SOURCE));
+    const sourceArray = Array.isArray(rawSources)
+        ? rawSources
+        : typeof rawSources === 'string'
+            ? rawSources.split(/[,;]/g)
+            : [];
+
+    const normalized = sourceArray
+        .map((source) => {
+            const value = String(source ?? '').trim();
+
+            if (value === 'world_info' || value === 'lorebooks') {
+                return TRIGGER_SOURCE.WORLD_INFO_LOREBOOKS;
+            }
+
+            return value;
+        })
+        .filter((source) => validSources.has(source));
+
+    if (!normalized.length) {
+        return [...DEFAULT_TRIGGER_SOURCES];
+    }
+
+    return [...new Set(normalized)];
+}
+
 function normalizeField(field = {}) {
+    const activatingTriggers = field.activatingTriggers ?? field.keywords ?? '';
+    const legacyKeywordMode = field.keywordMode;
+
     return {
         id: typeof field.id === 'string' && field.id.trim() ? field.id : makeId(),
         enabled: field.enabled !== false,
         name: String(field.name ?? ''),
         purpose: String(field.purpose ?? ''),
         instruction: normalizeInstruction(field.instruction),
-        exposeInstruction: Boolean(field.exposeInstruction),
-        keywords: String(field.keywords ?? ''),
-        keywordMode: normalizeKeywordMode(field.keywordMode),
+        activatingTriggers: String(activatingTriggers ?? ''),
+        enablingTriggers: String(field.enablingTriggers ?? ''),
+        disablingTriggers: String(field.disablingTriggers ?? ''),
+        triggerSources: normalizeTriggerSources(field.triggerSources),
+        activatingKeywordMode: normalizeKeywordMode(field.activatingKeywordMode ?? legacyKeywordMode),
+        enablingKeywordMode: normalizeKeywordMode(field.enablingKeywordMode ?? legacyKeywordMode),
+        disablingKeywordMode: normalizeKeywordMode(field.disablingKeywordMode ?? legacyKeywordMode),
         content: String(field.content ?? ''),
     };
 }
@@ -698,7 +760,6 @@ function normalizeState(rawState = {}) {
     return {
         ...clone(DEFAULT_STATE),
         swapEnabled: Boolean(source.swapEnabled),
-        allowWorldInfoScan: Boolean(source.allowWorldInfoScan),
         initializedDefaults: true,
         fields,
     };
@@ -758,10 +819,14 @@ function exportFieldForJson(field, index = 0) {
         name: normalized.name,
         purpose: normalized.purpose,
         inject: normalized.enabled,
-        keywordMode: normalized.keywordMode,
-        keywords: splitKeywords(normalized.keywords),
+        triggerSources: normalized.triggerSources,
+        activatingKeywordMode: normalized.activatingKeywordMode,
+        enablingKeywordMode: normalized.enablingKeywordMode,
+        disablingKeywordMode: normalized.disablingKeywordMode,
+        activatingTriggers: splitKeywords(normalized.activatingTriggers),
+        enablingTriggers: splitKeywords(normalized.enablingTriggers),
+        disablingTriggers: splitKeywords(normalized.disablingTriggers),
         instruction: splitLinesForJson(normalized.instruction),
-        revealInstruction: normalized.exposeInstruction,
         content: splitLinesForJson(normalized.content),
     };
 }
@@ -771,17 +836,27 @@ function importFieldFromJson(field = {}) {
         ? Boolean(field.inject)
         : field.enabled !== false;
 
+    const activatingTriggers = field.activatingTriggers ?? field.keywords ?? '';
+
     return normalizeField({
         id: makeId(),
         enabled,
         name: String(field.name ?? ''),
         purpose: String(field.purpose ?? field.name ?? ''),
         instruction: joinLinesFromJson(field.instruction || DEFAULT_FIELD_INSTRUCTION),
-        exposeInstruction: Boolean(field.revealInstruction ?? field.exposeInstruction),
-        keywords: Array.isArray(field.keywords)
-            ? field.keywords.map((keyword) => String(keyword ?? '')).join('\n')
-            : String(field.keywords ?? ''),
-        keywordMode: normalizeKeywordMode(field.keywordMode),
+        activatingTriggers: Array.isArray(activatingTriggers)
+            ? activatingTriggers.map((keyword) => String(keyword ?? '')).join('\n')
+            : String(activatingTriggers ?? ''),
+        enablingTriggers: Array.isArray(field.enablingTriggers)
+            ? field.enablingTriggers.map((keyword) => String(keyword ?? '')).join('\n')
+            : String(field.enablingTriggers ?? ''),
+        disablingTriggers: Array.isArray(field.disablingTriggers)
+            ? field.disablingTriggers.map((keyword) => String(keyword ?? '')).join('\n')
+            : String(field.disablingTriggers ?? ''),
+        triggerSources: normalizeTriggerSources(field.triggerSources),
+        activatingKeywordMode: normalizeKeywordMode(field.activatingKeywordMode ?? field.keywordMode),
+        enablingKeywordMode: normalizeKeywordMode(field.enablingKeywordMode ?? field.keywordMode),
+        disablingKeywordMode: normalizeKeywordMode(field.disablingKeywordMode ?? field.keywordMode),
         content: joinLinesFromJson(field.content),
     });
 }
@@ -807,9 +882,13 @@ function getComparableField(field) {
         name: normalized.name,
         purpose: normalized.purpose,
         instruction: normalized.instruction,
-        exposeInstruction: normalized.exposeInstruction,
-        keywords: normalized.keywords,
-        keywordMode: normalized.keywordMode,
+        activatingTriggers: normalized.activatingTriggers,
+        enablingTriggers: normalized.enablingTriggers,
+        disablingTriggers: normalized.disablingTriggers,
+        triggerSources: normalized.triggerSources,
+        activatingKeywordMode: normalized.activatingKeywordMode,
+        enablingKeywordMode: normalized.enablingKeywordMode,
+        disablingKeywordMode: normalized.disablingKeywordMode,
         content: normalized.content,
     };
 }
@@ -838,7 +917,6 @@ function isStateOutOfBox(state) {
 
     return (
         normalized.swapEnabled === false &&
-        normalized.allowWorldInfoScan === false &&
         areFieldsOutOfBox(normalized.fields)
     );
 }
@@ -952,7 +1030,7 @@ function updateState(mutator, { rerender = false, syncPromptManager = false } = 
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// Last User Message Tracking - Message Text Extraction
+// Trigger Source Text Collection - Generic Text Extraction
 // -----------------------------------------------------------------------------
 
 function getChatMessageText(message) {
@@ -976,6 +1054,64 @@ function getChatMessageText(message) {
 
     return '';
 }
+
+function stringifyTriggerSourceValue(value, seen = new WeakSet()) {
+    if (value === undefined || value === null) {
+        return '';
+    }
+
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map((entry) => stringifyTriggerSourceValue(entry, seen))
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    if (typeof value === 'object') {
+        if (seen.has(value)) {
+            return '';
+        }
+
+        seen.add(value);
+
+        const preferredText = [
+            value.content,
+            value.text,
+            value.message,
+            value.mes,
+            value.prompt,
+            value.value,
+            value.entries,
+            value.entry,
+        ]
+            .map((entry) => stringifyTriggerSourceValue(entry, seen))
+            .filter(Boolean)
+            .join('\n');
+
+        if (preferredText) {
+            return preferredText;
+        }
+
+        return Object.values(value)
+            .map((entry) => stringifyTriggerSourceValue(entry, seen))
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    return '';
+}
+
+// -----------------------------------------------------------------------------
+// Trigger Source Text Collection - Chat Message Classification
+// -----------------------------------------------------------------------------
 
 function isUserChatMessage(message) {
     if (!message || typeof message !== 'object') {
@@ -1004,14 +1140,57 @@ function isUserChatMessage(message) {
     return false;
 }
 
-function getLastUserMessageText() {
+function isAssistantChatMessage(message) {
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+
+    if (message.is_system || message.system || message.is_narrator) {
+        return false;
+    }
+
+    if (message.is_user === true) {
+        return false;
+    }
+
+    if (String(message.role || '').toLowerCase() === 'assistant') {
+        return true;
+    }
+
+    const ctx = getContext();
+    const characterName = getCharacterName();
+
+    if (characterName && String(message.name || '').trim() === characterName) {
+        return true;
+    }
+
+    return false;
+}
+
+function isSystemChatMessage(message) {
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+
+    return Boolean(
+        message.is_system ||
+        message.system ||
+        String(message.role || '').toLowerCase() === 'system',
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Trigger Source Text Collection - Chat Source Readers
+// -----------------------------------------------------------------------------
+
+function getLatestMatchingChatMessageText(predicate) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
 
     for (let index = chat.length - 1; index >= 0; index -= 1) {
         const message = chat[index];
 
-        if (!isUserChatMessage(message)) {
+        if (!predicate(message)) {
             continue;
         }
 
@@ -1025,12 +1204,135 @@ function getLastUserMessageText() {
     return '';
 }
 
+function getLastUserMessageText() {
+    return getLatestMatchingChatMessageText(isUserChatMessage);
+}
+
+function getLastAssistantMessageText() {
+    return getLatestMatchingChatMessageText(isAssistantChatMessage);
+}
+
+function getSystemChatMessagesText() {
+    const ctx = getContext();
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+
+    return chat
+        .filter(isSystemChatMessage)
+        .map(getChatMessageText)
+        .filter(Boolean)
+        .join('\n');
+}
+
 // -----------------------------------------------------------------------------
-// Last User Message Tracking - Trigger Text
+// Trigger Source Text Collection - Prompt and World Info Source Readers
 // -----------------------------------------------------------------------------
 
-function buildScanText() {
-    return getLastUserMessageText().toLowerCase();
+function getQuietPromptText() {
+    const ctx = getContext();
+
+    const candidates = [
+        ctx?.extensionPrompts,
+        ctx?.quietPrompts,
+        ctx?.quiet_prompts,
+        ctx?.promptBias,
+        ctx?.prompt_bias,
+    ];
+
+    return candidates
+        .map((candidate) => stringifyTriggerSourceValue(candidate))
+        .filter(Boolean)
+        .join('\n');
+}
+
+function getSystemPromptText() {
+    const manager = getPromptManagerInstance?.();
+    const promptOrder = getPromptOrder?.(manager) || [];
+
+    const promptManagerText = promptOrder
+        .filter((entry) => entry?.enabled !== false)
+        .map((entry) => {
+            const prompt = manager?.getPromptById?.(entry.identifier);
+            const role = String(prompt?.role || '').toLowerCase();
+
+            if (role !== 'system') {
+                return '';
+            }
+
+            return stringifyTriggerSourceValue(prompt?.content);
+        })
+        .filter(Boolean)
+        .join('\n');
+
+    return [
+        getSystemChatMessagesText(),
+        promptManagerText,
+    ]
+        .filter(Boolean)
+        .join('\n');
+}
+
+function getWorldInfoLorebookText() {
+    const ctx = getContext();
+
+    const candidates = [
+        ctx?.worldInfo,
+        ctx?.world_info,
+        ctx?.worldInfoCache,
+        ctx?.world_info_cache,
+        ctx?.activatedWorldInfo,
+        ctx?.activated_world_info,
+        ctx?.wiEntries,
+        ctx?.wi_entries,
+        ctx?.lorebooks,
+        ctx?.loreBooks,
+        ctx?.activatedLorebooks,
+        ctx?.activated_lorebooks,
+        ctx?.lorebookEntries,
+        ctx?.lorebook_entries,
+    ];
+
+    return candidates
+        .map((candidate) => stringifyTriggerSourceValue(candidate))
+        .filter(Boolean)
+        .join('\n');
+}
+
+// -----------------------------------------------------------------------------
+// Trigger Source Text Collection - Source Dispatcher
+// -----------------------------------------------------------------------------
+
+function getTriggerSourceText(source) {
+    if (source === TRIGGER_SOURCE.QUIET_PROMPTS) {
+        return getQuietPromptText();
+    }
+
+    if (source === TRIGGER_SOURCE.SYSTEM_PROMPTS) {
+        return getSystemPromptText();
+    }
+
+    if (source === TRIGGER_SOURCE.ASSISTANT_MESSAGES) {
+        return getLastAssistantMessageText();
+    }
+
+    if (source === TRIGGER_SOURCE.LAST_USER_MESSAGE) {
+        return getLastUserMessageText();
+    }
+
+    if (source === TRIGGER_SOURCE.WORLD_INFO_LOREBOOKS) {
+        return getWorldInfoLorebookText();
+    }
+
+    return '';
+}
+
+function buildScanText(triggerSources = DEFAULT_TRIGGER_SOURCES) {
+    const sources = normalizeTriggerSources(triggerSources);
+
+    return sources
+        .map((source) => getTriggerSourceText(source))
+        .filter(Boolean)
+        .join('\n')
+        .toLowerCase();
 }
 
 // ============================================================================
@@ -1042,7 +1344,7 @@ function buildScanText() {
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// Dynamic Field Matching and Prompt Assembly - Keyword Matching
+// Dynamic Field Matching and Prompt Assembly - Trigger Matching
 // -----------------------------------------------------------------------------
 
 function splitKeywords(rawKeywords) {
@@ -1052,8 +1354,75 @@ function splitKeywords(rawKeywords) {
         .filter(Boolean);
 }
 
-function fieldMatches(field, scanText) {
+function triggerListMatches(rawTriggers, scanText, keywordMode = KEYWORD_MODE.ALL) {
+    const triggers = splitKeywords(rawTriggers);
+
+    if (!triggers.length) {
+        return false;
+    }
+
+    const loweredTriggers = triggers.map((trigger) => trigger.toLowerCase());
+
+    if (keywordMode === KEYWORD_MODE.ALL) {
+        return loweredTriggers.every((trigger) => scanText.includes(trigger));
+    }
+
+    return loweredTriggers.some((trigger) => scanText.includes(trigger));
+}
+
+function activatingTriggersMatch(field, scanText) {
     const normalized = normalizeField(field);
+    const triggers = splitKeywords(normalized.activatingTriggers);
+
+    if (!triggers.length) {
+        return true;
+    }
+
+    return triggerListMatches(
+        normalized.activatingTriggers,
+        scanText,
+        normalized.activatingKeywordMode,
+    );
+}
+
+function applyFieldInjectTriggerToggles(state) {
+    let changed = false;
+
+    for (const field of state.fields) {
+        const normalized = normalizeField(field);
+        const scanText = buildScanText(normalized.triggerSources);
+
+        if (triggerListMatches(
+            normalized.disablingTriggers,
+            scanText,
+            normalized.disablingKeywordMode,
+        )) {
+            if (field.enabled !== false) {
+                field.enabled = false;
+                changed = true;
+            }
+
+            continue;
+        }
+
+        if (triggerListMatches(
+            normalized.enablingTriggers,
+            scanText,
+            normalized.enablingKeywordMode,
+        )) {
+            if (field.enabled !== true) {
+                field.enabled = true;
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+}
+
+function fieldMatches(field) {
+    const normalized = normalizeField(field);
+    const scanText = buildScanText(normalized.triggerSources);
 
     if (!normalized.enabled) {
         return false;
@@ -1063,19 +1432,7 @@ function fieldMatches(field, scanText) {
         return false;
     }
 
-    const keywords = splitKeywords(normalized.keywords);
-
-    if (keywords.length === 0) {
-        return true;
-    }
-
-    const loweredKeywords = keywords.map((keyword) => keyword.toLowerCase());
-
-    if (normalized.keywordMode === KEYWORD_MODE.ALL) {
-        return loweredKeywords.every((keyword) => scanText.includes(keyword));
-    }
-
-    return loweredKeywords.some((keyword) => scanText.includes(keyword));
+    return activatingTriggersMatch(normalized, scanText);
 }
 
 // -----------------------------------------------------------------------------
@@ -1127,8 +1484,19 @@ function buildReplacementPrompt(characterId = getActiveCharacterId()) {
         return '';
     }
 
-    const scanText = buildScanText();
-    const activeFields = state.fields.filter((field) => fieldMatches(field, scanText));
+    const toggled = applyFieldInjectTriggerToggles(state);
+
+    if (toggled) {
+        scheduleSave(characterId, state);
+
+        setTimeout(() => {
+            renderPanel();
+            updateTokenEstimate();
+            updateSettingsActionState();
+        }, 0);
+    }
+
+    const activeFields = state.fields.filter((field) => fieldMatches(field));
 
     if (!activeFields.length) {
         return '';
@@ -1660,9 +2028,13 @@ function createFieldFromNativeImport(name, content) {
         name,
         purpose: name,
         instruction: DEFAULT_FIELD_INSTRUCTION,
-        exposeInstruction: false,
-        keywords: '',
-        keywordMode: KEYWORD_MODE.ALL,
+        activatingTriggers: '',
+        enablingTriggers: '',
+        disablingTriggers: '',
+        triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+        activatingKeywordMode: KEYWORD_MODE.ALL,
+        enablingKeywordMode: KEYWORD_MODE.ALL,
+        disablingKeywordMode: KEYWORD_MODE.ALL,
         content,
         enabled: true,
     });
@@ -1818,7 +2190,7 @@ async function exportDynamicFieldsToClipboardJson() {
 }
 
 // ============================================================================
-// Section 12A. Extensions Drawer Settings
+// Section 13. Extensions Drawer Settings
 // ============================================================================
 // Purpose:
 // - Own the Aspect: Evolutia settings drawer in SillyTavern's Extensions tab.
@@ -1881,7 +2253,7 @@ async function removeAllFieldsForAllCharacters() {
 
     const confirmed = window.confirm(
         'Remove all Dynamic Fields from all character cards in Character Management?\n\n' +
-        'This keeps each character’s Dynamic Fields toggle and WI Scan setting as they are, but removes every Dynamic Field from every character card.',
+        'This keeps each character’s Dynamic Fields toggle as it is, but removes every Dynamic Field from every character card.',
     );
 
     if (!confirmed) {
@@ -1929,8 +2301,8 @@ async function removeAllFieldsForCurrentChatCharacters() {
 
     const confirmed = window.confirm(
         isGroup
-            ? 'Remove all Dynamic Fields from every character in the currently open group chat?\n\nThis keeps each character’s Dynamic Fields toggle and WI Scan setting as they are.'
-            : 'Remove all Dynamic Fields from the character in the currently open chat?\n\nThis keeps the character’s Dynamic Fields toggle and WI Scan setting as they are.',
+            ? 'Remove all Dynamic Fields from every character in the currently open group chat?\n\nThis keeps each character’s Dynamic Fields toggle as it is.'
+: 'Remove all Dynamic Fields from the character in the currently open chat?\n\nThis keeps the character’s Dynamic Fields toggle as it is.',
     );
 
     if (!confirmed) {
@@ -1976,7 +2348,7 @@ async function resetAllCharactersToOutOfBox() {
 
     const confirmed = window.confirm(
         'Reset Aspect: Evolutia for all character cards in Character Management?\n\n' +
-        'This will turn Dynamic Fields off, disable WI Scan, and restore the default Background, Personality, and Appearance fields.',
+        'This will turn Dynamic Fields off and restore the default Background, Personality, and Appearance fields.',
     );
 
     if (!confirmed) {
@@ -1992,7 +2364,8 @@ async function resetAllCharactersToOutOfBox() {
 
     stateCache.clear();
     restoreSuppressedDescriptions();
-    await syncPromptManagerWithActiveState();
+
+    await syncPromptManagerForState(createOutOfBoxState());
 
     renderPanel();
     applyUiVisibility();
@@ -2054,7 +2427,7 @@ function updateSettingsActionState() {
             ? 'No character cards were found in Character Management.'
             : allFieldsRemoved
                 ? 'All Dynamic Fields are already removed from every character card in Character Management.'
-                : 'Remove all Dynamic Fields from every character card in Character Management. This keeps each character’s Dynamic Fields toggle and WI Scan setting as they are.',
+                : 'Remove all Dynamic Fields from every character card in Character Management. This keeps each character’s Dynamic Fields toggle as it is.',
     });
 
     setSettingsButtonState(UI.SETTINGS_REMOVE_CURRENT_FIELDS_ID, {
@@ -2070,8 +2443,8 @@ function updateSettingsActionState() {
                 )
                 : (
                     isGroup
-                        ? 'Remove all Dynamic Fields from every character in the currently open group chat. This keeps each character’s Dynamic Fields toggle and WI Scan setting as they are.'
-                        : 'Remove all Dynamic Fields from the character in the currently open chat. This keeps the character’s Dynamic Fields toggle and WI Scan setting as they are.'
+                        ? 'Remove all Dynamic Fields from every character in the currently open group chat. This keeps each character’s Dynamic Fields toggle as they are.'
+                        : 'Remove all Dynamic Fields from the character in the currently open chat. This keeps the character’s Dynamic Fields toggle as it is.'
                 ),
     });
 
@@ -2081,7 +2454,7 @@ function updateSettingsActionState() {
             ? 'No character cards were found in Character Management.'
             : allOutOfBox
                 ? 'Aspect: Evolutia is already reset for every character card in Character Management.'
-                : 'Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, WI Scan will be disabled, and the default Background, Personality, and Appearance fields will be restored.',
+                : 'Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored.',
     });
 }
 
@@ -2114,7 +2487,7 @@ function mountExtensionSettings() {
                                 id="${UI.SETTINGS_REMOVE_FIELDS_ID}"
                                 type="button"
                                 class="menu_button danger_button"
-                                title="Remove all Dynamic Fields from every character card in Character Management. This keeps each character's Dynamic Fields toggle and WI Scan setting as they are."
+                                title="Remove all Dynamic Fields from every character card in Character Management. This keeps each character's Dynamic Fields toggle as it is."
                             >
                                 Remove All Fields for All Characters
                             </button>
@@ -2133,7 +2506,7 @@ function mountExtensionSettings() {
                                 id="${UI.SETTINGS_RESET_EXTENSION_ID}"
                                 type="button"
                                 class="menu_button danger_button"
-                                title="Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, WI Scan will be disabled, and the default Background, Personality, and Appearance fields will be restored."
+                                title="Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored."
                             >
                                 Reset Extension
                             </button>
@@ -2175,7 +2548,7 @@ function bindExtensionSettingsEvents() {
 }
 
 // ============================================================================
-// Section 13. User Interface Rendering
+// Section 14. User Interface Rendering
 // ============================================================================
 // Purpose:
 // - Own CSS, DOM mounting, field-list rendering, and visibility rules.
@@ -2407,6 +2780,95 @@ function ensureStyles() {
             font-size: 0.9em;
         }
 
+        #${UI.PANEL_ID} .dsf-trigger-control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 4px;
+            margin-bottom: 4px;
+            width: 100%;
+        }
+
+        #${UI.PANEL_ID} .dsf-triggered-by-wrap {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin-right: auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-triggered-by-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            width: auto;
+            min-width: max-content;
+            flex: 0 0 auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-triggered-by-menu {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: calc(100% + 4px);
+            z-index: 10000;
+            min-width: 210px;
+            padding: 8px;
+            border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.25));
+            border-radius: 8px;
+            background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor, #1e1e1e));
+            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+        }
+
+        #${UI.PANEL_ID} .dsf-triggered-by-menu.dsf-menu-open {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        #${UI.PANEL_ID} .dsf-trigger-source-option {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            width: 100%;
+            margin: 0;
+            white-space: nowrap;
+        }
+
+        #${UI.PANEL_ID} .dsf-trigger-source-option input {
+            width: auto;
+            min-width: unset;
+        }
+
+        #${UI.PANEL_ID} .dsf-trigger-textarea {
+            min-height: 44px;
+            resize: vertical;
+        }
+
+        #${UI.PANEL_ID} .dsf-trigger-mode-row {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            width: 100%;
+            margin-top: 4px;
+            margin-bottom: 4px;
+        }
+
+        #${UI.PANEL_ID} .dsf-trigger-mode-row .dsf-keyword-mode-wrap {
+            margin-left: auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-activating-keyword-mode,
+        #${UI.PANEL_ID} .dsf-enabling-keyword-mode,
+        #${UI.PANEL_ID} .dsf-disabling-keyword-mode {
+            width: auto;
+            min-width: 5.5em;
+        }
+
         #${UI.PANEL_ID} .dsf-position-control {
             display: inline-flex;
             align-items: center;
@@ -2455,6 +2917,7 @@ function ensureStyles() {
         #${UI.PANEL_ID} .dsf-keyword-mode-wrap {
             display: inline-flex;
             align-items: center;
+            justify-content: flex-end;
             gap: 6px;
             margin-left: auto;
             font-size: 0.85em;
@@ -2466,21 +2929,54 @@ function ensureStyles() {
             min-width: 5.5em;
         }
 
-        #${UI.PANEL_ID} .dsf-reveal-instruction-row {
+        #${UI.PANEL_ID} .dsf-prompt-row {
             display: flex;
+            align-items: center;
             justify-content: flex-end;
             margin-top: 6px;
+            width: 100%;
         }
 
-        #${UI.PANEL_ID} .dsf-reveal-instruction-wrap {
+        #${UI.PANEL_ID} .dsf-prompt-wrap {
+            position: relative;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            justify-content: flex-end;
             margin-left: auto;
         }
 
+        #${UI.PANEL_ID} .dsf-prompt-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            width: auto;
+            min-width: max-content;
+            flex: 0 0 auto;
+        }
+
+        #${UI.PANEL_ID} .dsf-prompt-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: calc(100% + 4px);
+            z-index: 10000;
+            width: min(520px, 80vw);
+            padding: 8px;
+            border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.25));
+            border-radius: 8px;
+            background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor, #1e1e1e));
+            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+        }
+
+        #${UI.PANEL_ID} .dsf-prompt-menu.dsf-menu-open {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
         #${UI.PANEL_ID} .dsf-instruction-editor {
-            margin-top: 6px;
+            margin-top: 0;
         }
 
         #${UI.PANEL_ID} .dsf-instruction-actions {
@@ -2544,8 +3040,10 @@ function ensureStyles() {
             resize: vertical;
         }
 
-        #${UI.PANEL_ID} .dsf-keywords {
-            min-height: 48px;
+        #${UI.PANEL_ID} .dsf-activating-triggers,
+        #${UI.PANEL_ID} .dsf-enabling-triggers,
+        #${UI.PANEL_ID} .dsf-disabling-triggers {
+            min-height: 44px;
             resize: vertical;
         }
 
@@ -2680,11 +3178,6 @@ function mountUi() {
                             <input id="${UI.SWAP_ID}" type="checkbox" />
                             <span>Dynamic Fields</span>
                         </label>
-
-                        <label id="${UI.WI_SCAN_WRAP_ID}" class="checkbox_label" title="Reserved for compatibility. Prompt Manager macro injection does not use extension prompt WI Scan.">
-                            <input id="${UI.WI_SCAN_ID}" type="checkbox">
-                            <span>WI Scan</span>
-                        </label>
                     </div>
 
                     <div class="dsf-top-action-row">
@@ -2754,7 +3247,6 @@ function applyUiVisibility() {
     const hasFields = state.fields.length > 0;
 
     $(`#${UI.SWAP_ID}`).prop('checked', state.swapEnabled);
-    $(`#${UI.WI_SCAN_ID}`).prop('checked', state.allowWorldInfoScan);
 
     $(`#${UI.DELETE_ALL_TOP_ID}`)
         .toggle(state.swapEnabled)
@@ -2770,7 +3262,6 @@ function applyUiVisibility() {
     $(`#${UI.ADD_TOP_ID}`).toggle(state.swapEnabled);
     $(`#${UI.BOTTOM_ACTIONS_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
     $(`#${UI.ADD_BOTTOM_ID}`).toggle(state.swapEnabled);
-    $(`#${UI.WI_SCAN_WRAP_ID}`).toggle(state.swapEnabled);
     $(`#${UI.TOKEN_ROW_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
 
     $description.toggle(!state.swapEnabled);
@@ -2807,19 +3298,31 @@ function renderPanel() {
 
 function renderFieldHtml(field, index = 0) {
     const normalized = normalizeField(field);
-    const keywordMode = normalizeKeywordMode(normalized.keywordMode);
-    const instructionEditorHtml = normalized.exposeInstruction
-        ? `
-            <div class="dsf-instruction-editor">
-                <div class="dsf-label">Instruction</div>
-                <textarea class="text_pole dsf-field-instruction" placeholder="${escapeAttribute(DEFAULT_FIELD_INSTRUCTION)}">${escapeTextarea(normalized.instruction)}</textarea>
+    const triggerSources = normalizeTriggerSources(normalized.triggerSources);
+    const promptMenuHtml = `
+        <div class="dsf-instruction-editor">
+            <div class="dsf-label">Instruction</div>
+            <textarea class="text_pole dsf-field-instruction" placeholder="${escapeAttribute(DEFAULT_FIELD_INSTRUCTION)}">${escapeTextarea(normalized.instruction)}</textarea>
 
-                <div class="dsf-instruction-actions">
-                    <button type="button" class="menu_button dsf-reset-instruction">Reset</button>
-                </div>
+            <div class="dsf-instruction-actions">
+                <button type="button" class="menu_button dsf-reset-instruction">Reset</button>
             </div>
-        `
-        : '';
+        </div>
+    `;
+
+    const triggerSourceOptionsHtml = Object.values(TRIGGER_SOURCE)
+        .map((source) => `
+            <label class="checkbox_label dsf-trigger-source-option">
+                <input
+                    class="dsf-trigger-source"
+                    type="checkbox"
+                    value="${escapeAttribute(source)}"
+                    ${triggerSources.includes(source) ? 'checked' : ''}
+                >
+                <span>${escapeTextarea(TRIGGER_SOURCE_LABELS[source])}</span>
+            </label>
+        `)
+        .join('');
 
     return `
         <div class="dsf-field" data-field-id="${escapeAttribute(normalized.id)}">
@@ -2846,23 +3349,55 @@ function renderFieldHtml(field, index = 0) {
             <div class="dsf-label">Field Purpose</div>
             <input class="text_pole dsf-field-purpose" type="text" placeholder="Example: Appearance, Personality, or Background" value="${escapeAttribute(normalized.purpose)}">
 
-            <div class="dsf-reveal-instruction-row">
-                <label class="checkbox_label dsf-reveal-instruction-wrap" title="Show and customize the instruction used for this field.">
-                    <input class="dsf-expose-instruction" type="checkbox" ${normalized.exposeInstruction ? 'checked' : ''}>
-                    <span>Reveal Instruction</span>
+            <div class="dsf-prompt-row">
+                <div class="dsf-prompt-wrap">
+                    <button type="button" class="menu_button dsf-prompt-button">Prompt</button>
+                    <div class="dsf-prompt-menu">
+                        ${promptMenuHtml}
+                    </div>
+                </div>
+            </div>
+
+            <div class="dsf-label">Activating Triggers (Separate by comma, semicolon, or newline).</div>
+            <textarea class="text_pole dsf-activating-triggers dsf-trigger-textarea" placeholder="Example: Intro, Pre-Reveal, EVOLUTION_STAGE: Pre-War Arc">${escapeTextarea(normalized.activatingTriggers)}</textarea>
+            <div class="dsf-trigger-mode-row">
+                <label class="dsf-keyword-mode-wrap" title="Any means at least one activating trigger must match. All means every activating trigger must match.">
+                    <span>Match</span>
+                    <select class="text_pole dsf-activating-keyword-mode">
+                        <option value="${KEYWORD_MODE.ANY}" ${normalized.activatingKeywordMode === KEYWORD_MODE.ANY ? 'selected' : ''}>Any</option>
+                        <option value="${KEYWORD_MODE.ALL}" ${normalized.activatingKeywordMode === KEYWORD_MODE.ALL ? 'selected' : ''}>All</option>
+                    </select>
                 </label>
             </div>
 
-            ${instructionEditorHtml}
-
-            <div class="dsf-label">Keyword Triggers (Separate by comma, semicolon, or newline).</div>
-            <textarea class="text_pole dsf-keywords" placeholder="Example: Intro, Pre-Reveal, EVOLUTION_STAGE: Pre-War Arc">${escapeTextarea(normalized.keywords)}</textarea>
-            <div class="dsf-keyword-mode-row">
-                <label class="dsf-keyword-mode-wrap" title="Any means at least one trigger must match. All means every trigger must match.">
+            <div class="dsf-label">Enabling Triggers (Separate by comma, semicolon, or newline).</div>
+            <textarea class="text_pole dsf-enabling-triggers dsf-trigger-textarea" placeholder="Example: I put on my nightwear">${escapeTextarea(normalized.enablingTriggers)}</textarea>
+            <div class="dsf-trigger-mode-row">
+                <label class="dsf-keyword-mode-wrap" title="Any means at least one enabling trigger must match. All means every enabling trigger must match.">
                     <span>Match</span>
-                    <select class="text_pole dsf-keyword-mode">
-                        <option value="${KEYWORD_MODE.ANY}" ${keywordMode === KEYWORD_MODE.ANY ? 'selected' : ''}>Any</option>
-                        <option value="${KEYWORD_MODE.ALL}" ${keywordMode === KEYWORD_MODE.ALL ? 'selected' : ''}>All</option>
+                    <select class="text_pole dsf-enabling-keyword-mode">
+                        <option value="${KEYWORD_MODE.ANY}" ${normalized.enablingKeywordMode === KEYWORD_MODE.ANY ? 'selected' : ''}>Any</option>
+                        <option value="${KEYWORD_MODE.ALL}" ${normalized.enablingKeywordMode === KEYWORD_MODE.ALL ? 'selected' : ''}>All</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="dsf-label">Disabling Triggers (Separate by comma, semicolon, or newline).</div>
+            <textarea class="text_pole dsf-disabling-triggers dsf-trigger-textarea" placeholder="Example: I put on my nightwear">${escapeTextarea(normalized.disablingTriggers)}</textarea>
+
+            <div class="dsf-trigger-control-row">
+                <div class="dsf-triggered-by-wrap">
+                    <button type="button" class="menu_button dsf-triggered-by-button">Trigger Sources</button>
+                    <div class="dsf-triggered-by-menu">
+                        ${triggerSourceOptionsHtml}
+                    </div>
+                </div>
+
+                <label class="dsf-keyword-mode-wrap" title="Any means at least one disabling trigger must match. All means every disabling trigger must match.">
+                    <span>Match</span>
+                    <select class="text_pole dsf-disabling-keyword-mode">
+                        <option value="${KEYWORD_MODE.ANY}" ${normalized.disablingKeywordMode === KEYWORD_MODE.ANY ? 'selected' : ''}>Any</option>
+                        <option value="${KEYWORD_MODE.ALL}" ${normalized.disablingKeywordMode === KEYWORD_MODE.ALL ? 'selected' : ''}>All</option>
                     </select>
                 </label>
             </div>
@@ -2872,7 +3407,7 @@ function renderFieldHtml(field, index = 0) {
 
             <div class="dsf-bottom-row">
                 <div class="dsf-inject-row">
-                    <label class="checkbox_label" title="When enabled, this field can be injected if its content and keyword conditions allow it.">
+                    <label class="checkbox_label" title="When enabled, this field can be injected if its content and trigger conditions allow it.">
                         <input class="dsf-field-enabled" type="checkbox" ${normalized.enabled ? 'checked' : ''}>
                         <span>Inject</span>
                     </label>
@@ -2888,7 +3423,7 @@ function renderFieldHtml(field, index = 0) {
 }
 
 // ============================================================================
-// Section 14. User Interface Events
+// Section 15. User Interface Events
 // ============================================================================
 // Purpose:
 // - Own DOM event binding for controls and field editors.
@@ -2952,21 +3487,17 @@ function bindUiHandlers() {
                     name: '',
                     purpose: '',
                     instruction: DEFAULT_FIELD_INSTRUCTION,
-                    exposeInstruction: false,
-                    keywords: '',
-                    keywordMode: KEYWORD_MODE.ALL,
+                    activatingTriggers: '',
+                    enablingTriggers: '',
+                    disablingTriggers: '',
+                    triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+                    activatingKeywordMode: KEYWORD_MODE.ALL,
+                    enablingKeywordMode: KEYWORD_MODE.ALL,
+                    disablingKeywordMode: KEYWORD_MODE.ALL,
                     content: '',
                     enabled: true,
                 }));
             }, { rerender: true });
-        });
-
-    $(document)
-        .off(`change.${MODULE_NAME}`, `#${UI.WI_SCAN_ID}`)
-        .on(`change.${MODULE_NAME}`, `#${UI.WI_SCAN_ID}`, function onWiScanChanged() {
-            updateState((state) => {
-                state.allowWorldInfoScan = Boolean(this.checked);
-            }, { rerender: false });
         });
 
     bindFieldEditHandlers();
@@ -3014,21 +3545,6 @@ function bindFieldEditHandlers() {
         });
 
     $(document)
-        .off(`change.${MODULE_NAME}`, '.dsf-expose-instruction')
-        .on(`change.${MODULE_NAME}`, '.dsf-expose-instruction', function onExposeInstructionChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
-
-            updateState((state) => {
-                const field = findField(state, fieldId);
-
-                if (field) {
-                    field.exposeInstruction = Boolean(this.checked);
-                    field.instruction = normalizeInstruction(field.instruction);
-                }
-            }, { rerender: true });
-        });
-
-    $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-field-instruction')
         .on(`input.${MODULE_NAME}`, '.dsf-field-instruction', function onFieldInstructionChanged() {
             const fieldId = $(this).closest('.dsf-field').data('field-id');
@@ -3040,24 +3556,86 @@ function bindFieldEditHandlers() {
         });
 
     $(document)
-        .off(`change.${MODULE_NAME}`, '.dsf-keyword-mode')
-        .on(`change.${MODULE_NAME}`, '.dsf-keyword-mode', function onKeywordModeChanged() {
+        .off(`input.${MODULE_NAME}`, '.dsf-activating-triggers')
+        .on(`input.${MODULE_NAME}`, '.dsf-activating-triggers', function onActivatingTriggersChanged() {
             const fieldId = $(this).closest('.dsf-field').data('field-id');
 
             updateState((state) => {
                 const field = findField(state, fieldId);
-                if (field) field.keywordMode = normalizeKeywordMode(this.value);
+                if (field) field.activatingTriggers = this.value;
             }, { rerender: false });
         });
 
     $(document)
-        .off(`input.${MODULE_NAME}`, '.dsf-keywords')
-        .on(`input.${MODULE_NAME}`, '.dsf-keywords', function onKeywordsChanged() {
+        .off(`input.${MODULE_NAME}`, '.dsf-enabling-triggers')
+        .on(`input.${MODULE_NAME}`, '.dsf-enabling-triggers', function onEnablingTriggersChanged() {
             const fieldId = $(this).closest('.dsf-field').data('field-id');
 
             updateState((state) => {
                 const field = findField(state, fieldId);
-                if (field) field.keywords = this.value;
+                if (field) field.enablingTriggers = this.value;
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`input.${MODULE_NAME}`, '.dsf-disabling-triggers')
+        .on(`input.${MODULE_NAME}`, '.dsf-disabling-triggers', function onDisablingTriggersChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.disablingTriggers = this.value;
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-activating-keyword-mode')
+        .on(`change.${MODULE_NAME}`, '.dsf-activating-keyword-mode', function onActivatingKeywordModeChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.activatingKeywordMode = normalizeKeywordMode(this.value);
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-enabling-keyword-mode')
+        .on(`change.${MODULE_NAME}`, '.dsf-enabling-keyword-mode', function onEnablingKeywordModeChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.enablingKeywordMode = normalizeKeywordMode(this.value);
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-disabling-keyword-mode')
+        .on(`change.${MODULE_NAME}`, '.dsf-disabling-keyword-mode', function onDisablingKeywordModeChanged() {
+            const fieldId = $(this).closest('.dsf-field').data('field-id');
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.disablingKeywordMode = normalizeKeywordMode(this.value);
+            }, { rerender: false });
+        });
+
+    $(document)
+        .off(`change.${MODULE_NAME}`, '.dsf-trigger-source')
+        .on(`change.${MODULE_NAME}`, '.dsf-trigger-source', function onTriggerSourceChanged() {
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = $field.data('field-id');
+            const selectedSources = $field
+                .find('.dsf-trigger-source:checked')
+                .map(function mapSource() {
+                    return this.value;
+                })
+                .get();
+
+            updateState((state) => {
+                const field = findField(state, fieldId);
+                if (field) field.triggerSources = normalizeTriggerSources(selectedSources);
             }, { rerender: false });
         });
 
@@ -3080,13 +3658,18 @@ function bindFieldEditHandlers() {
 function bindFieldActionHandlers() {
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-reset-instruction')
-        .on(`click.${MODULE_NAME}`, '.dsf-reset-instruction', function onResetInstruction() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+        .on(`click.${MODULE_NAME}`, '.dsf-reset-instruction', function onResetInstruction(event) {
+            event.stopPropagation();
+
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = $field.data('field-id');
 
             updateState((state) => {
                 const field = findField(state, fieldId);
                 if (field) field.instruction = DEFAULT_FIELD_INSTRUCTION;
-            }, { rerender: true });
+            }, { rerender: false });
+
+            $field.find('.dsf-field-instruction').val(DEFAULT_FIELD_INSTRUCTION);
         });
 
     $(document)
@@ -3392,6 +3975,8 @@ function bindFieldReorderHandlers() {
 
 function closeImportExportMenus() {
     $(`#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`).removeClass('dsf-menu-open');
+    $('.dsf-triggered-by-menu').removeClass('dsf-menu-open');
+    $('.dsf-prompt-menu').removeClass('dsf-menu-open');
 }
 
 function toggleMenu(menuId) {
@@ -3406,6 +3991,43 @@ function toggleMenu(menuId) {
 }
 
 function bindImportExportHandlers() {
+    $(document)
+        .off(`click.${MODULE_NAME}`, '.dsf-triggered-by-button')
+        .on(`click.${MODULE_NAME}`, '.dsf-triggered-by-button', function onTriggeredByClicked(event) {
+            event.stopPropagation();
+
+            const $menu = $(this).siblings('.dsf-triggered-by-menu');
+            const wasOpen = $menu.hasClass('dsf-menu-open');
+
+            $('.dsf-triggered-by-menu').removeClass('dsf-menu-open');
+
+            if (!wasOpen) {
+                $menu.addClass('dsf-menu-open');
+            }
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '.dsf-triggered-by-menu')
+        .on(`click.${MODULE_NAME}`, '.dsf-triggered-by-menu', function onTriggeredByMenuClicked(event) {
+            event.stopPropagation();
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '.dsf-prompt-button')
+        .on(`click.${MODULE_NAME}`, '.dsf-prompt-button', function onPromptButtonClicked(event) {
+            event.stopPropagation();
+
+            const $menu = $(this).siblings('.dsf-prompt-menu');
+            const wasOpen = $menu.hasClass('dsf-menu-open');
+
+            $('.dsf-prompt-menu').removeClass('dsf-menu-open');
+            $('.dsf-triggered-by-menu').removeClass('dsf-menu-open');
+
+            if (!wasOpen) {
+                $menu.addClass('dsf-menu-open');
+            }
+        });
+
     $(document)
         .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`)
         .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`, function onImportClicked(event) {
@@ -3466,11 +4088,19 @@ function bindImportExportHandlers() {
 
     $(document)
         .off(`click.${MODULE_NAME}.menus`)
-        .on(`click.${MODULE_NAME}.menus`, closeImportExportMenus);
+        .on(`click.${MODULE_NAME}.menus`, function onDocumentClickedForMenus(event) {
+            const $target = $(event.target);
+
+            if ($target.closest('.dsf-prompt-wrap, .dsf-triggered-by-wrap, .dsf-menu-wrap').length) {
+                return;
+            }
+
+            closeImportExportMenus();
+        });
 }
 
 // ============================================================================
-// Section 15. Generation Flow
+// Section 16. Generation Flow
 // ============================================================================
 // Purpose:
 // - Own generation-time behavior needed by the Prompt Manager macro.
@@ -3500,7 +4130,7 @@ function onGenerationFinished() {
 }
 
 // ============================================================================
-// Section 16. SillyTavern Event Wiring
+// Section 17. SillyTavern Event Wiring
 // ============================================================================
 // Purpose:
 // - Own subscriptions to SillyTavern app, character, chat, and generation events.
@@ -3587,7 +4217,7 @@ function registerEvents() {
 }
 
 // ============================================================================
-// Section 17. DOM Mount Observer
+// Section 18. DOM Mount Observer
 // ============================================================================
 // Purpose:
 // - Own remounting the UI when SillyTavern replaces character editor DOM.
@@ -3629,7 +4259,7 @@ function observeDom() {
 }
 
 // ============================================================================
-// Section 18. Extension Activation
+// Section 19. Extension Activation
 // ============================================================================
 // Purpose:
 // - Own one-time startup for Aspect: Evolutia.
