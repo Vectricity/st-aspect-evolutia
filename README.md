@@ -9,37 +9,29 @@ The goal is to make character cards cleaner, more stage-aware, and easier to mai
 ## What It Does
 
 - Adds a Dynamic Fields mode to the character editor
-- Hides the normal Description editor while Dynamic Fields mode is enabled
+- Hides the native Description field while Dynamic Fields mode is active
 - Stores Dynamic Fields per character card using SillyTavern extension data
-- Creates default fields for new Dynamic Fields setups:
+- Creates default fields for new setups:
   - Background
   - Personality
   - Appearance
-- Lets you add, duplicate, delete, and edit custom Dynamic Fields
-- Lets each field have:
-  - Field Name
-  - Field Purpose
-  - Keyword Triggers
-  - Content
-  - Inject toggle
-  - Optional custom instruction text
-- Supports keyword-triggered field injection
-- Treats blank keyword triggers as always eligible for injection
-- Treats blank content as non-injectable
-- Uses the latest sent user message for keyword trigger matching
-- Wraps Dynamic Fields in clear, LLM-readable bracket tags
-- Identifies the fields as applying to the assistant-written character, not the user persona
-- Automatically creates and manages an Aspect: Evolutia Prompt Manager prompt
-- Automatically toggles native Character Description off when Dynamic Fields mode is enabled
-- Automatically toggles native Character Description back on when Dynamic Fields mode is disabled
-- Uses a custom macro to inject either:
-  - Dynamic Fields when Dynamic Fields mode is enabled
-  - The native Description when Dynamic Fields mode is disabled
-
-- Lets each field use Match Any or Match All keyword trigger behavior
-- Defaults new fields to Match All keyword trigger behavior
-- Lets fields be reordered by Position number or drag handle
-- Adds a Delete All button for clearing the current character’s Dynamic Fields
+- Lets each field contain focused character information
+- Lets fields be manually enabled, disabled, duplicated, deleted, and reordered
+- Supports trigger-aware injection through:
+  - Activating Triggers
+  - Enabling Triggers
+  - Disabling Triggers
+- Lets triggers scan different sources, including:
+  - Last User Message
+  - Last Assistant Message
+  - System Prompts
+  - Quiet Prompts
+  - World Info / Lorebooks
+- Supports optional Trigger Actions for custom behavior before field content becomes active
+- Automatically manages the Aspect: Evolutia Prompt Manager prompt
+- Preserves Prompt Manager ordering instead of forcing extension-prompt placement
+- Uses a Prompt Interceptor to prepare Dynamic Fields before prompt construction
+- Uses a read-only macro as the Prompt Manager insertion point
 - Supports importing Dynamic Fields from:
   - Character Card
   - SillyTavern Fields
@@ -48,17 +40,12 @@ The goal is to make character cards cleaner, more stage-aware, and easier to mai
 - Supports exporting Dynamic Fields to:
   - File (JSON)
   - Clipboard (JSON)
-- Imports add fields to the existing Dynamic Fields list instead of replacing it
-- Automatically renames imported duplicate field names
-
-- Keeps Prompt Manager ordering available instead of forcing extension-prompt ordering
 - Shows a Dynamic Fields token estimate while Dynamic Fields mode is active
-- Hides the standard character token counter while Dynamic Fields mode is active
-- Includes extension drawer controls for field cleanup and reset actions
+- Includes extension drawer controls for cleanup and reset actions
 
 ## Dynamic Fields
 
-Each Dynamic Field represents one focused piece of character-defining information.
+Each Dynamic Field can define separate character information.
 
 Examples:
 
@@ -70,30 +57,65 @@ Examples:
 - Combat Style
 - Relationships
 - Speech Pattern
-- Knowledge Limits
+- Knowledge
 - Emotional State
 - Inventory
 - Injuries
-- Faction Role
+- Wardrobe
+- Current Outfit
+- Current Form
+- Current Location
 
 Each field can be written and triggered separately, allowing the character to evolve without forcing every version of the character into the prompt at once.
 
-Fields can also be manually reordered. The Position control sets the field’s injection order, and the drag handle can be used to move fields visually.
+Fields can also be manually reordered, which also controls the field’s injection order.
 
 ## Keyword Triggers
 
-Keyword Triggers decide when a field becomes eligible for injection.
+Keyword Triggers decide when a field becomes eligible for injection or when its Inject state should change.
 
-Triggers may be separated by:
+Keyword Triggers are grouped into three types:
 
-- Commas
-- Semicolons
-- New lines
+- Activating Triggers
+- Enabling Triggers
+- Disabling Triggers
 
-Example:
+Activating Triggers inject field Content when matched.
+
+Enabling Triggers can turn Inject on when matched.
+
+Disabling Triggers can turn Inject off when matched.
+
+## Trigger Sources
+
+Trigger Sources decide where a field looks for keyword matches.
+
+Available Trigger Sources include:
+
+- Quiet Prompts
+- System Prompts
+- Last Assistant Message
+- Last User Message
+- World Info / Lorebooks
+
+For example, a field can be enabled when the assistant says a specific phrase, when a user message contains a keyword, or when relevant World Info / Lorebook content is active.
+
+## Trigger Actions
+
+Trigger Actions are optional action instructions that can inject before a field’s normal Content becomes active.
+
+Trigger Actions are useful when a keyword should cause the character to perform an action before the new field content becomes part of the character’s active state.
+
+Example Trigger Action:
 
 ```text
-Intro, Pre-Reveal, EVOLUTION_STAGE: Pre-War Arc
+I get dressed in my nightwear.
+```
+
+Example Content that becomes active after the Trigger Action:
+
+```text
+I am currently wearing my nightwear.
 ```
 
 Please consider tipping a job well done. 

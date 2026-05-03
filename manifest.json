@@ -4,7 +4,8 @@
   "requires": [],
   "optional": [],
   "js": "index.js",
+  "generate_interceptor": "aspectEvolutiaGenerateInterceptor",
   "author": "Genisai",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "homePage": "https://github.com/Vectricity/st-aspect-evolutia"
 }
