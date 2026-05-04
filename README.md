@@ -8,7 +8,7 @@ The goal is to make Characters / Personas cleaner, more stage-aware, and easier 
 
 ## What It Does
 
-- Adds a Dynamic Fields mode to the character editor and Persona editor
+- Adds a Dynamic Fields mode to the Character editor and Persona editor
 - Hides the native Description field while Dynamic Fields mode is active
 - Stores Dynamic Fields per Character / Persona
 - Creates default fields for new setups:
