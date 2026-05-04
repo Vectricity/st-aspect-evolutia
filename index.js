@@ -8,29 +8,50 @@
 // Section 1. Imports
 // ============================================================================
 // Owns all external dependencies used by this extension file.
-// Keep this section limited to import statements only.
 // ============================================================================
 
+import { saveSettingsDebounced as importedSaveSettingsDebounced } from '../../../../script.js';
 import { getContext as importedGetContext } from '../../../extensions.js';
 import { promptManager } from '../../../openai.js';
 import { MacrosParser } from '../../../macros.js';
+import { user_avatar } from '../../../personas.js';
+import { persona_description_positions, power_user } from '../../../power-user.js';
 
 // ============================================================================
 // Section 2. Module Constants and State
 // ============================================================================
 // Purpose:
 // - Own stable identifiers, default settings, UI element IDs, and runtime state.
-// - Other components may read these constants and maps for consistent behavior.
 // ============================================================================
 
 const MODULE_NAME = 'st-description-swap-fields';
 
-const ASPECT_PROMPT_ID = 'aspectEvolutiaDescription';
-const ASPECT_PROMPT_NAME = 'Aspect: Evolutia Description';
-const ASPECT_MACRO_NAME = 'aspectEvolutiaDescription';
-const ASPECT_MACRO_TEXT = `{{${ASPECT_MACRO_NAME}}}`;
+const TARGET_SCOPE = Object.freeze({
+    CHARACTER: 'character',
+    PERSONA: 'persona',
+});
+
+const CHARACTER_ASPECT_PROMPT_ID = 'aspectEvolutiaCharDescription';
+const CHARACTER_ASPECT_PROMPT_NAME = 'Char Description (Evolutia)';
+const CHARACTER_ASPECT_MACRO_NAME = 'aspectEvolutiaCharDescription';
+const CHARACTER_ASPECT_MACRO_TEXT = `{{${CHARACTER_ASPECT_MACRO_NAME}}}`;
+
+const PERSONA_ASPECT_PROMPT_ID = 'aspectEvolutiaPersonaDescription';
+const PERSONA_ASPECT_PROMPT_NAME = 'Persona Description (Evolutia)';
+const PERSONA_ASPECT_MACRO_NAME = 'aspectEvolutiaPersonaDescription';
+const PERSONA_ASPECT_MACRO_TEXT = `{{${PERSONA_ASPECT_MACRO_NAME}}}`;
+
 const ASPECT_INTERCEPTOR_NAME = 'aspectEvolutiaGenerateInterceptor';
+
 const NATIVE_DESCRIPTION_PROMPT_ID = 'charDescription';
+const NATIVE_PERSONA_PROMPT_ID = 'personaDescription';
+
+// Backward-compatible aliases for the existing character-side implementation.
+// Later sections should prefer the CHARACTER_* names directly.
+const ASPECT_PROMPT_ID = CHARACTER_ASPECT_PROMPT_ID;
+const ASPECT_PROMPT_NAME = CHARACTER_ASPECT_PROMPT_NAME;
+const ASPECT_MACRO_NAME = CHARACTER_ASPECT_MACRO_NAME;
+const ASPECT_MACRO_TEXT = CHARACTER_ASPECT_MACRO_TEXT;
 
 const KEYWORD_MODE = Object.freeze({
     ANY: 'any',
@@ -72,6 +93,7 @@ const DEFAULT_TRIGGER_SOURCES = Object.freeze([
 const IMPORT_SOURCE = Object.freeze({
     CHARACTER_CARD: 'character_card',
     NATIVE_FIELDS: 'native_fields',
+    PERSONA_DESCRIPTION: 'persona_description',
     FILE_JSON: 'file_json',
     CLIPBOARD_JSON: 'clipboard_json',
 });
@@ -103,8 +125,13 @@ const NATIVE_IMPORT_HEADINGS = new Set([
     'behaviour',
 ]);
 
+const PERSONA_STATE_SETTINGS_KEY = 'personaDynamicFields';
+const PERSONA_STATE_UNKNOWN_KEY = '__unknown_persona__';
+
 const UI = Object.freeze({
     STYLE_ID: 'dsf_style',
+
+    // Character editor UI
     BAR_ID: 'dsf_swap_bar',
     PANEL_ID: 'dsf_panel',
     BOTTOM_ACTIONS_ID: 'dsf_bottom_actions',
@@ -120,12 +147,42 @@ const UI = Object.freeze({
     CHARACTER_CARD_IMPORT_FILE_ID: 'dsf_character_card_import_file',
     DYNAMIC_FIELDS_IMPORT_FILE_ID: 'dsf_dynamic_fields_import_file',
     TOKEN_ID: 'dsf_token_estimate',
+
+    // Persona management UI
+    PERSONA_BAR_ID: 'dsf_persona_swap_bar',
+    PERSONA_PANEL_ID: 'dsf_persona_panel',
+    PERSONA_BOTTOM_ACTIONS_ID: 'dsf_persona_bottom_actions',
+    PERSONA_TOKEN_ROW_ID: 'dsf_persona_token_row',
+    PERSONA_SWAP_ID: 'dsf_persona_swap_enabled',
+    PERSONA_DELETE_ALL_TOP_ID: 'dsf_persona_delete_all_fields_top',
+    PERSONA_ADD_TOP_ID: 'dsf_persona_add_field_top',
+    PERSONA_ADD_BOTTOM_ID: 'dsf_persona_add_field_bottom',
+    PERSONA_IMPORT_ID: 'dsf_persona_import',
+    PERSONA_IMPORT_MENU_ID: 'dsf_persona_import_menu',
+    PERSONA_EXPORT_ID: 'dsf_persona_export',
+    PERSONA_EXPORT_MENU_ID: 'dsf_persona_export_menu',
+    PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID: 'dsf_persona_dynamic_fields_import_file',
+    PERSONA_TOKEN_ID: 'dsf_persona_token_estimate',
+
+    // Extension drawer UI
     SETTINGS_ID: 'dsf_extension_settings',
     SETTINGS_VERSION_ID: 'dsf_settings_version',
     SETTINGS_AUTHOR_ID: 'dsf_settings_author',
-    SETTINGS_REMOVE_FIELDS_ID: 'dsf_remove_all_fields',
-    SETTINGS_REMOVE_CURRENT_FIELDS_ID: 'dsf_remove_current_fields',
-    SETTINGS_RESET_EXTENSION_ID: 'dsf_reset_extension',
+
+    SETTINGS_CHARACTER_BOX_ID: 'dsf_settings_character_box',
+    SETTINGS_CHARACTER_REMOVE_FIELDS_ID: 'dsf_character_remove_all_fields',
+    SETTINGS_CHARACTER_REMOVE_CURRENT_FIELDS_ID: 'dsf_character_remove_current_fields',
+    SETTINGS_CHARACTER_RESET_EXTENSION_ID: 'dsf_character_reset_extension',
+
+    SETTINGS_PERSONA_BOX_ID: 'dsf_settings_persona_box',
+    SETTINGS_PERSONA_REMOVE_FIELDS_ID: 'dsf_persona_remove_all_fields',
+    SETTINGS_PERSONA_REMOVE_CURRENT_FIELDS_ID: 'dsf_persona_remove_current_fields',
+    SETTINGS_PERSONA_RESET_EXTENSION_ID: 'dsf_persona_reset_extension',
+
+    // Backward-compatible aliases for existing character settings references.
+    SETTINGS_REMOVE_FIELDS_ID: 'dsf_character_remove_all_fields',
+    SETTINGS_REMOVE_CURRENT_FIELDS_ID: 'dsf_character_remove_current_fields',
+    SETTINGS_RESET_EXTENSION_ID: 'dsf_character_reset_extension',
 });
 
 const DEFAULT_STATE = Object.freeze({
@@ -157,13 +214,32 @@ const STANDARD_TOKEN_COUNTER_SELECTORS = [
     '[data-testid="character-token-counter"]',
 ];
 
+const PERSONA_TOKEN_COUNTER_SELECTORS = [
+    '#persona_description_tokens',
+    '#persona_description_token_counter',
+    '#persona_token_counter',
+    '#persona_tokens',
+    '.persona_description_tokens',
+    '.persona-description-tokens',
+    '.persona_token_counter',
+    '.persona-token-counter',
+    '.persona_tokens',
+    '.persona-tokens',
+    '[data-persona-token-counter]',
+    '[data-testid="persona-description-token-counter"]',
+];
+
 let booted = false;
 let saveTimer = null;
+let personaSaveTimer = null;
 let mountTimer = null;
+let personaMountTimer = null;
 let currentGenerationCharacterId = undefined;
+let currentGenerationPersonaId = undefined;
 let currentGenerationId = 0;
 let generationSerial = 0;
 let tokenUpdateSerial = 0;
+let personaTokenUpdateSerial = 0;
 let manifestMeta = { ...DEFAULT_MANIFEST_META };
 let fieldPointerDrag = null;
 let fieldDragAutoScrollFrame = null;
@@ -172,6 +248,7 @@ const FIELD_DRAG_AUTOSCROLL_MARGIN = 80;
 const FIELD_DRAG_AUTOSCROLL_MAX_SPEED = 22;
 
 const stateCache = new Map();
+const personaStateCache = new Map();
 const descriptionBackups = new Map();
 const preparedPromptCache = new Map();
 
@@ -180,7 +257,6 @@ const preparedPromptCache = new Map();
 // ============================================================================
 // Purpose:
 // - Own generic helpers used across components.
-// - Other components may call these helpers for cloning, IDs, escaping, and notices.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -339,23 +415,36 @@ async function readTextFromClipboard() {
 }
 
 // ============================================================================
-// Section 4. SillyTavern Context and Character Access
+// Section 4. SillyTavern Context, Character, and Persona Access
 // ============================================================================
 // Purpose:
-// - Own safe access to SillyTavern context, active character IDs, and characters.
-// - Other components may call this to read the currently selected character.
+// - Own safe access to SillyTavern context, active character IDs, active persona IDs,
+//   character records, persona records, and native Description text.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// SillyTavern Context and Character Access - Context Resolution
+// SillyTavern Context, Character, and Persona Access - Context Resolution
 // -----------------------------------------------------------------------------
 
 function getContext() {
     return globalThis.SillyTavern?.getContext?.() ?? importedGetContext();
 }
 
+function getPowerUserSettings() {
+    return power_user ?? getContext()?.power_user ?? getContext()?.powerUser ?? globalThis.power_user ?? null;
+}
+
+function getSaveSettingsDebounced() {
+    return (
+        importedSaveSettingsDebounced ??
+        getContext()?.saveSettingsDebounced ??
+        globalThis.saveSettingsDebounced ??
+        null
+    );
+}
+
 // -----------------------------------------------------------------------------
-// SillyTavern Context and Character Access - Character Resolution
+// SillyTavern Context, Character, and Persona Access - Character Resolution
 // -----------------------------------------------------------------------------
 
 function getActiveCharacterId() {
@@ -380,7 +469,7 @@ function normalizeCharacterId(characterId) {
 }
 
 function getGenerationCharacterId(options = {}) {
-    const forced = options?.force_chid;
+    const forced = options?.force_chid ?? options?.chid ?? options?.characterId;
 
     if (forced !== undefined && forced !== null && forced !== '') {
         return normalizeCharacterId(forced);
@@ -425,7 +514,7 @@ function getNativePersonalityForCharacter(character) {
 }
 
 // -----------------------------------------------------------------------------
-// SillyTavern Context and Character Access - Character Collections
+// SillyTavern Context, Character, and Persona Access - Character Collections
 // -----------------------------------------------------------------------------
 
 function getAllCharacterIds() {
@@ -615,12 +704,372 @@ function getCurrentCharactersButtonLabel() {
         : 'Remove All Fields for Current Character';
 }
 
+// -----------------------------------------------------------------------------
+// SillyTavern Context, Character, and Persona Access - Persona Resolution
+// -----------------------------------------------------------------------------
+
+function normalizePersonaId(personaId) {
+    if (personaId === undefined || personaId === null || personaId === '') {
+        return undefined;
+    }
+
+    if (typeof personaId === 'object') {
+        const nestedCandidates = [
+            personaId.avatarId,
+            personaId.avatar_id,
+            personaId.user_avatar,
+            personaId.userAvatar,
+            personaId.id,
+        ];
+
+        for (const candidate of nestedCandidates) {
+            const normalized = normalizePersonaId(candidate);
+
+            if (normalized) {
+                return normalized;
+            }
+        }
+
+        return undefined;
+    }
+
+    const text = String(personaId).trim();
+    return text || undefined;
+}
+
+function getPersonaIdFromDom() {
+    const candidates = [
+        $('#user_avatar_block .avatar-container.selected').attr('data-avatar-id'),
+        $('#user_avatar_block .avatar-container.selected').data('avatar-id'),
+        $('#user_avatar_block .avatar-container.selected .avatar').attr('data-avatar-id'),
+        $('#user_avatar_block .avatar-container.selected .avatar').data('avatar-id'),
+
+        $('#user_avatar_block .avatar.default_persona').attr('data-avatar-id'),
+        $('#user_avatar_block .avatar.default_persona').data('avatar-id'),
+
+        $('#persona_container .avatar-container.selected').attr('data-avatar-id'),
+        $('#persona_container .avatar-container.selected').data('avatar-id'),
+        $('#persona_container .avatar-container.selected .avatar').attr('data-avatar-id'),
+        $('#persona_container .avatar-container.selected .avatar').data('avatar-id'),
+
+        $('#persona_list .avatar-container.selected').attr('data-avatar-id'),
+        $('#persona_list .avatar-container.selected').data('avatar-id'),
+        $('#persona_list .avatar-container.selected .avatar').attr('data-avatar-id'),
+        $('#persona_list .avatar-container.selected .avatar').data('avatar-id'),
+
+        $('.persona_selected').attr('data-avatar-id'),
+        $('.persona_selected').data('avatar-id'),
+        $('.persona_selected .avatar').attr('data-avatar-id'),
+        $('.persona_selected .avatar').data('avatar-id'),
+
+        // Legacy/defensive fallback only.
+        $('#user_avatar_block .avatar').attr('imgfile'),
+        $('#user_avatar_block img').attr('imgfile'),
+        $('#user_avatar').attr('imgfile'),
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizePersonaId(candidate);
+
+        if (normalized) {
+            return normalized;
+        }
+    }
+
+    return undefined;
+}
+
+function getActivePersonaId() {
+    const candidates = [
+        user_avatar,
+        getContext()?.user_avatar,
+        getContext()?.userAvatar,
+        getContext()?.personaId,
+        getContext()?.activePersonaId,
+        getContext()?.active_persona_id,
+        getPersonaIdFromDom(),
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizePersonaId(candidate);
+
+        if (normalized) {
+            return normalized;
+        }
+    }
+
+    return undefined;
+}
+
+function getGenerationPersonaId(options = {}) {
+    const forced = (
+        options?.force_persona_id ??
+        options?.forcePersonaId ??
+        options?.personaId ??
+        options?.user_avatar ??
+        options?.userAvatar
+    );
+
+    if (forced !== undefined && forced !== null && forced !== '') {
+        return normalizePersonaId(forced);
+    }
+
+    return getActivePersonaId();
+}
+
+function getMacroPersonaId() {
+    if (currentGenerationPersonaId !== undefined && currentGenerationPersonaId !== null && currentGenerationPersonaId !== '') {
+        return currentGenerationPersonaId;
+    }
+
+    return getActivePersonaId();
+}
+
+function getPersonaCacheKey(personaId = getActivePersonaId()) {
+    const normalized = normalizePersonaId(personaId);
+    return normalized || PERSONA_STATE_UNKNOWN_KEY;
+}
+
+function getPersonaName(personaId = getMacroPersonaId()) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+    const powerUser = getPowerUserSettings();
+    const ctx = getContext();
+
+    const candidates = [
+        normalizedPersonaId ? powerUser?.personas?.[normalizedPersonaId] : '',
+        ctx?.name1,
+        globalThis.name1,
+        $('#your_name').text(),
+        $('#your_name').val(),
+        $('#user_name').val(),
+    ];
+
+    for (const candidate of candidates) {
+        const text = String(candidate ?? '').trim();
+
+        if (text) {
+            return text;
+        }
+    }
+
+    return 'the user persona';
+}
+
+function getPersonaDescriptionObject(personaId = getActivePersonaId()) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+    const powerUser = getPowerUserSettings();
+
+    if (!normalizedPersonaId || !powerUser || typeof powerUser !== 'object') {
+        return null;
+    }
+
+    const existing = powerUser.persona_descriptions?.[normalizedPersonaId];
+
+    if (existing && typeof existing === 'object') {
+        return existing;
+    }
+
+    if (typeof existing === 'string') {
+        return {
+            description: existing,
+            position: persona_description_positions.IN_PROMPT,
+        };
+    }
+
+    return null;
+}
+
+function getActivePersonaDescriptionObject() {
+    const personaId = getActivePersonaId();
+    const descriptionObject = getPersonaDescriptionObject(personaId);
+
+    if (descriptionObject) {
+        return descriptionObject;
+    }
+
+    const powerUser = getPowerUserSettings();
+
+    if (!powerUser || typeof powerUser !== 'object') {
+        return null;
+    }
+
+    return {
+        description: powerUser.persona_description ?? '',
+        position: powerUser.persona_description_position ?? persona_description_positions.IN_PROMPT,
+        depth: powerUser.persona_description_depth,
+        role: powerUser.persona_description_role,
+        lorebook: powerUser.persona_description_lorebook,
+    };
+}
+
+function getNativePersonaDescriptionForPersona(personaId = getActivePersonaId()) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+    const activePersonaId = normalizePersonaId(getActivePersonaId());
+
+    const descriptionObject = normalizedPersonaId === activePersonaId
+        ? getActivePersonaDescriptionObject()
+        : getPersonaDescriptionObject(normalizedPersonaId);
+
+    return String(descriptionObject?.description ?? '').trim();
+}
+
+function getPersonaDescriptionPosition(personaId = getActivePersonaId()) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+    const activePersonaId = normalizePersonaId(getActivePersonaId());
+
+    const descriptionObject = normalizedPersonaId === activePersonaId
+        ? getActivePersonaDescriptionObject()
+        : getPersonaDescriptionObject(normalizedPersonaId);
+
+    const rawPosition = descriptionObject?.position;
+
+    if (rawPosition === undefined || rawPosition === null || rawPosition === '') {
+        return persona_description_positions.IN_PROMPT;
+    }
+
+    const numeric = Number(rawPosition);
+
+    if (Number.isFinite(numeric)) {
+        return numeric;
+    }
+
+    return String(rawPosition).trim();
+}
+
+function isPersonaDescriptionInPromptManagerPosition(personaId = getActivePersonaId()) {
+    const position = getPersonaDescriptionPosition(personaId);
+
+    if (position === persona_description_positions.IN_PROMPT) {
+        return true;
+    }
+
+    const text = String(position).trim().toLowerCase();
+
+    return [
+        String(persona_description_positions.IN_PROMPT),
+        'in_prompt',
+        'prompt',
+        'prompt_manager',
+        'story_string',
+        'in story string',
+        'in story string / prompt manager',
+    ].includes(text);
+}
+
+function getAllPersonaIds() {
+    const powerUser = getPowerUserSettings();
+
+    if (!powerUser || typeof powerUser !== 'object') {
+        const activePersonaId = getActivePersonaId();
+        return activePersonaId ? [activePersonaId] : [];
+    }
+
+    const ids = new Set();
+
+    for (const key of Object.keys(powerUser.personas || {})) {
+        const normalized = normalizePersonaId(key);
+
+        if (normalized) {
+            ids.add(normalized);
+        }
+    }
+
+    for (const key of Object.keys(powerUser.persona_descriptions || {})) {
+        const normalized = normalizePersonaId(key);
+
+        if (normalized) {
+            ids.add(normalized);
+        }
+    }
+
+    const activePersonaId = getActivePersonaId();
+
+    if (activePersonaId) {
+        ids.add(activePersonaId);
+    }
+
+    return [...ids];
+}
+
+function getCurrentPersonaIds() {
+    const personaId = getActivePersonaId();
+    return personaId ? [personaId] : [];
+}
+
+function getCurrentPersonaButtonLabel() {
+    return 'Remove All Fields for Current Persona';
+}
+
+// -----------------------------------------------------------------------------
+// SillyTavern Context, Character, and Persona Access - Persona Extension Storage
+// -----------------------------------------------------------------------------
+
+function getPersonaExtensionRoot({ create = false } = {}) {
+    const powerUser = getPowerUserSettings();
+
+    if (!powerUser || typeof powerUser !== 'object') {
+        return null;
+    }
+
+    if (!powerUser[MODULE_NAME] || typeof powerUser[MODULE_NAME] !== 'object') {
+        if (!create) {
+            return null;
+        }
+
+        powerUser[MODULE_NAME] = {};
+    }
+
+    if (!powerUser[MODULE_NAME][PERSONA_STATE_SETTINGS_KEY] || typeof powerUser[MODULE_NAME][PERSONA_STATE_SETTINGS_KEY] !== 'object') {
+        if (!create) {
+            return null;
+        }
+
+        powerUser[MODULE_NAME][PERSONA_STATE_SETTINGS_KEY] = {};
+    }
+
+    return powerUser[MODULE_NAME][PERSONA_STATE_SETTINGS_KEY];
+}
+
+function getPersonaExtensionStateRecord(personaId = getActivePersonaId()) {
+    const key = getPersonaCacheKey(personaId);
+    const root = getPersonaExtensionRoot();
+
+    if (!root || typeof root !== 'object') {
+        return undefined;
+    }
+
+    return root[key];
+}
+
+function setPersonaExtensionStateRecord(personaId, state) {
+    const key = getPersonaCacheKey(personaId);
+    const root = getPersonaExtensionRoot({ create: true });
+
+    if (!root || typeof root !== 'object') {
+        return false;
+    }
+
+    root[key] = state;
+    return true;
+}
+
+function deletePersonaExtensionStateRecord(personaId) {
+    const key = getPersonaCacheKey(personaId);
+    const root = getPersonaExtensionRoot();
+
+    if (!root || typeof root !== 'object') {
+        return false;
+    }
+
+    delete root[key];
+    return true;
+}
+
 // ============================================================================
 // Section 5. Field and State Model
 // ============================================================================
 // Purpose:
 // - Own normalization of saved extension data into predictable runtime objects.
-// - Other components may call this before reading or persisting state.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -688,6 +1137,14 @@ function createOutOfBoxState() {
     });
 }
 
+function createOutOfBoxPersonaState() {
+    return normalizePersonaState({
+        swapEnabled: false,
+        initializedDefaults: true,
+        fields: createDefaultFields(),
+    });
+}
+
 function createEmptyFieldsState(characterId = getActiveCharacterId()) {
     const state = readState(characterId);
 
@@ -695,6 +1152,15 @@ function createEmptyFieldsState(characterId = getActiveCharacterId()) {
     state.fields = [];
 
     return normalizeState(state);
+}
+
+function createEmptyPersonaFieldsState(personaId = getActivePersonaId()) {
+    const state = readPersonaState(personaId);
+
+    state.initializedDefaults = true;
+    state.fields = [];
+
+    return normalizePersonaState(state);
 }
 
 function normalizeKeywordMode(rawMode) {
@@ -733,10 +1199,19 @@ function normalizeTriggerActionPhase(rawPhase) {
     return TRIGGER_ACTION_PHASE.IDLE;
 }
 
-function normalizeField(field = {}) {
+function shouldIncludeTriggerActions(options = {}) {
+    if (options.includeTriggerActions !== undefined) {
+        return Boolean(options.includeTriggerActions);
+    }
+
+    return options.targetScope !== TARGET_SCOPE.PERSONA;
+}
+
+function normalizeField(field = {}, options = {}) {
     const activatingTriggers = field.activatingTriggers ?? field.keywords ?? '';
     const legacyKeywordMode = field.keywordMode;
     const generationId = Number(field.triggerActionGenerationId);
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
 
     return {
         id: typeof field.id === 'string' && field.id.trim() ? field.id : makeId(),
@@ -749,29 +1224,44 @@ function normalizeField(field = {}) {
         activatingKeywordMode: normalizeKeywordMode(field.activatingKeywordMode ?? legacyKeywordMode),
         enablingKeywordMode: normalizeKeywordMode(field.enablingKeywordMode ?? legacyKeywordMode),
         disablingKeywordMode: normalizeKeywordMode(field.disablingKeywordMode ?? legacyKeywordMode),
-        triggerActionInstruction: String(field.triggerActionInstruction ?? ''),
-        triggerActionPhase: normalizeTriggerActionPhase(field.triggerActionPhase),
-        triggerActionGenerationId: Number.isFinite(generationId) ? Math.max(0, generationId) : 0,
-        triggerActionEnabledByGeneration: Boolean(field.triggerActionEnabledByGeneration),
+        triggerActionInstruction: includeTriggerActions ? String(field.triggerActionInstruction ?? '') : '',
+        triggerActionPhase: includeTriggerActions ? normalizeTriggerActionPhase(field.triggerActionPhase) : TRIGGER_ACTION_PHASE.IDLE,
+        triggerActionGenerationId: includeTriggerActions && Number.isFinite(generationId) ? Math.max(0, generationId) : 0,
+        triggerActionEnabledByGeneration: includeTriggerActions ? Boolean(field.triggerActionEnabledByGeneration) : false,
         content: String(field.content ?? ''),
     };
+}
+
+function normalizeCharacterField(field = {}) {
+    return normalizeField(field, {
+        targetScope: TARGET_SCOPE.CHARACTER,
+        includeTriggerActions: true,
+    });
+}
+
+function normalizePersonaField(field = {}) {
+    return normalizeField(field, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        includeTriggerActions: false,
+    });
 }
 
 // -----------------------------------------------------------------------------
 // Field and State Model - State Normalization
 // -----------------------------------------------------------------------------
 
-function normalizeState(rawState = {}) {
+function normalizeState(rawState = {}, options = {}) {
     const source = rawState && typeof rawState === 'object' ? rawState : {};
     const hasSavedFields = Array.isArray(source.fields);
     const initializedDefaults = Boolean(source.initializedDefaults);
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
 
     let fields = hasSavedFields
-        ? source.fields.map(normalizeField)
-        : createDefaultFields();
+        ? source.fields.map((field) => normalizeField(field, { ...options, includeTriggerActions }))
+        : createDefaultFields().map((field) => normalizeField(field, { ...options, includeTriggerActions }));
 
     if (!initializedDefaults && fields.length === 0) {
-        fields = createDefaultFields();
+        fields = createDefaultFields().map((field) => normalizeField(field, { ...options, includeTriggerActions }));
     }
 
     return {
@@ -780,6 +1270,20 @@ function normalizeState(rawState = {}) {
         initializedDefaults: true,
         fields,
     };
+}
+
+function normalizeCharacterState(rawState = {}) {
+    return normalizeState(rawState, {
+        targetScope: TARGET_SCOPE.CHARACTER,
+        includeTriggerActions: true,
+    });
+}
+
+function normalizePersonaState(rawState = {}) {
+    return normalizeState(rawState, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        includeTriggerActions: false,
+    });
 }
 
 function findField(state, fieldId) {
@@ -803,9 +1307,10 @@ function getUniqueFieldName(existingFields, requestedName) {
     return `${baseName} ${counter}`;
 }
 
-function prepareImportedFields(fields, existingFields = []) {
+function prepareImportedFields(fields, existingFields = [], options = {}) {
     const result = [];
     const nameContext = [...existingFields];
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
 
     for (const rawField of fields) {
         const normalized = normalizeField({
@@ -816,6 +1321,9 @@ function prepareImportedFields(fields, existingFields = []) {
             triggerActionGenerationId: 0,
             triggerActionEnabledByGeneration: false,
             keywordMode: normalizeKeywordMode(rawField?.keywordMode),
+        }, {
+            ...options,
+            includeTriggerActions,
         });
 
         normalized.name = getUniqueFieldName(nameContext, normalized.name);
@@ -826,14 +1334,32 @@ function prepareImportedFields(fields, existingFields = []) {
     return result;
 }
 
+function prepareImportedPersonaFields(fields, existingFields = []) {
+    return prepareImportedFields(fields, existingFields, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        includeTriggerActions: false,
+    });
+}
+
+function prepareImportedCharacterFields(fields, existingFields = []) {
+    return prepareImportedFields(fields, existingFields, {
+        targetScope: TARGET_SCOPE.CHARACTER,
+        includeTriggerActions: true,
+    });
+}
+
 // -----------------------------------------------------------------------------
 // Field and State Model - Clean Import / Export Conversion
 // -----------------------------------------------------------------------------
 
-function exportFieldForJson(field, index = 0) {
-    const normalized = normalizeField(field);
+function exportFieldForJson(field, index = 0, options = {}) {
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
+    const normalized = normalizeField(field, {
+        ...options,
+        includeTriggerActions,
+    });
 
-    return {
+    const payload = {
         order: index + 1,
         name: normalized.name,
         inject: normalized.enabled,
@@ -844,12 +1370,32 @@ function exportFieldForJson(field, index = 0) {
         activatingTriggers: splitKeywords(normalized.activatingTriggers),
         enablingTriggers: splitKeywords(normalized.enablingTriggers),
         disablingTriggers: splitKeywords(normalized.disablingTriggers),
-        triggerActionInstruction: splitLinesForJson(normalized.triggerActionInstruction),
         content: splitLinesForJson(normalized.content),
     };
+
+    if (includeTriggerActions) {
+        payload.triggerActionInstruction = splitLinesForJson(normalized.triggerActionInstruction);
+    }
+
+    return payload;
 }
 
-function importFieldFromJson(field = {}) {
+function exportCharacterFieldForJson(field, index = 0) {
+    return exportFieldForJson(field, index, {
+        targetScope: TARGET_SCOPE.CHARACTER,
+        includeTriggerActions: true,
+    });
+}
+
+function exportPersonaFieldForJson(field, index = 0) {
+    return exportFieldForJson(field, index, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        includeTriggerActions: false,
+    });
+}
+
+function importFieldFromJson(field = {}, options = {}) {
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
     const enabled = hasOwn(field, 'inject')
         ? Boolean(field.inject)
         : field.enabled !== false;
@@ -873,11 +1419,28 @@ function importFieldFromJson(field = {}) {
         activatingKeywordMode: normalizeKeywordMode(field.activatingKeywordMode ?? field.keywordMode),
         enablingKeywordMode: normalizeKeywordMode(field.enablingKeywordMode ?? field.keywordMode),
         disablingKeywordMode: normalizeKeywordMode(field.disablingKeywordMode ?? field.keywordMode),
-        triggerActionInstruction: joinLinesFromJson(field.triggerActionInstruction),
+        triggerActionInstruction: includeTriggerActions ? joinLinesFromJson(field.triggerActionInstruction) : '',
         triggerActionPhase: TRIGGER_ACTION_PHASE.IDLE,
         triggerActionGenerationId: 0,
         triggerActionEnabledByGeneration: false,
         content: joinLinesFromJson(field.content),
+    }, {
+        ...options,
+        includeTriggerActions,
+    });
+}
+
+function importCharacterFieldFromJson(field = {}) {
+    return importFieldFromJson(field, {
+        targetScope: TARGET_SCOPE.CHARACTER,
+        includeTriggerActions: true,
+    });
+}
+
+function importPersonaFieldFromJson(field = {}) {
+    return importFieldFromJson(field, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        includeTriggerActions: false,
     });
 }
 
@@ -894,10 +1457,23 @@ function areFieldsRemovedForCharacters(characterIds) {
     return characterIds.length > 0 && characterIds.every((characterId) => areFieldsRemovedForCharacter(characterId));
 }
 
-function getComparableField(field) {
-    const normalized = normalizeField(field);
+function areFieldsRemovedForPersona(personaId) {
+    const state = readPersonaState(personaId);
+    return state.fields.length === 0;
+}
 
-    return {
+function areFieldsRemovedForPersonas(personaIds) {
+    return personaIds.length > 0 && personaIds.every((personaId) => areFieldsRemovedForPersona(personaId));
+}
+
+function getComparableField(field, options = {}) {
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
+    const normalized = normalizeField(field, {
+        ...options,
+        includeTriggerActions,
+    });
+
+    const comparable = {
         enabled: normalized.enabled,
         name: normalized.name,
         activatingTriggers: normalized.activatingTriggers,
@@ -907,39 +1483,61 @@ function getComparableField(field) {
         activatingKeywordMode: normalized.activatingKeywordMode,
         enablingKeywordMode: normalized.enablingKeywordMode,
         disablingKeywordMode: normalized.disablingKeywordMode,
-        triggerActionInstruction: normalized.triggerActionInstruction,
-        triggerActionPhase: normalized.triggerActionPhase,
-        triggerActionGenerationId: normalized.triggerActionGenerationId,
-        triggerActionEnabledByGeneration: normalized.triggerActionEnabledByGeneration,
         content: normalized.content,
     };
+
+    if (includeTriggerActions) {
+        comparable.triggerActionInstruction = normalized.triggerActionInstruction;
+        comparable.triggerActionPhase = normalized.triggerActionPhase;
+        comparable.triggerActionGenerationId = normalized.triggerActionGenerationId;
+        comparable.triggerActionEnabledByGeneration = normalized.triggerActionEnabledByGeneration;
+    }
+
+    return comparable;
 }
 
-function areFieldsOutOfBox(fields) {
+function areFieldsOutOfBox(fields, options = {}) {
+    const includeTriggerActions = shouldIncludeTriggerActions(options);
     const normalizedFields = Array.isArray(fields)
-        ? fields.map(normalizeField)
+        ? fields.map((field) => normalizeField(field, { ...options, includeTriggerActions }))
         : [];
 
-    const defaultFields = createDefaultFields();
+    const defaultFields = createDefaultFields()
+        .map((field) => normalizeField(field, { ...options, includeTriggerActions }));
 
     if (normalizedFields.length !== defaultFields.length) {
         return false;
     }
 
     return normalizedFields.every((field, index) => {
-        const actual = getComparableField(field);
-        const expected = getComparableField(defaultFields[index]);
+        const actual = getComparableField(field, { ...options, includeTriggerActions });
+        const expected = getComparableField(defaultFields[index], { ...options, includeTriggerActions });
 
         return JSON.stringify(actual) === JSON.stringify(expected);
     });
 }
 
 function isStateOutOfBox(state) {
-    const normalized = normalizeState(state);
+    const normalized = normalizeCharacterState(state);
 
     return (
         normalized.swapEnabled === false &&
-        areFieldsOutOfBox(normalized.fields)
+        areFieldsOutOfBox(normalized.fields, {
+            targetScope: TARGET_SCOPE.CHARACTER,
+            includeTriggerActions: true,
+        })
+    );
+}
+
+function isPersonaStateOutOfBox(state) {
+    const normalized = normalizePersonaState(state);
+
+    return (
+        normalized.swapEnabled === false &&
+        areFieldsOutOfBox(normalized.fields, {
+            targetScope: TARGET_SCOPE.PERSONA,
+            includeTriggerActions: false,
+        })
     );
 }
 
@@ -951,12 +1549,20 @@ function areCharactersOutOfBox(characterIds) {
     return characterIds.length > 0 && characterIds.every((characterId) => isCharacterOutOfBox(characterId));
 }
 
+function isPersonaOutOfBox(personaId) {
+    return isPersonaStateOutOfBox(readPersonaState(personaId));
+}
+
+function arePersonasOutOfBox(personaIds) {
+    return personaIds.length > 0 && personaIds.every((personaId) => isPersonaOutOfBox(personaId));
+}
+
 // ============================================================================
-// Section 6. Character Extension Persistence
+// Section 6. Character and Persona Extension Persistence
 // ============================================================================
 // Purpose:
-// - Own reading, caching, and saving per-character Aspect: Exolutia data.
-// - Other components may call readState/updateState to mutate extension settings.
+// - Own reading, caching, and saving per-character Aspect: Evolutia data.
+// - Own reading, caching, and saving per-persona Aspect: Evolutia data.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -972,14 +1578,14 @@ function readState(characterId = getActiveCharacterId()) {
 
     const character = getCharacter(characterId);
     const rawState = character?.data?.extensions?.[MODULE_NAME];
-    const state = normalizeState(rawState);
+    const state = normalizeCharacterState(rawState);
 
     stateCache.set(key, state);
     return clone(state);
 }
 
 function cacheState(characterId, state) {
-    const normalized = normalizeState(state);
+    const normalized = normalizeCharacterState(state);
     stateCache.set(getCacheKey(characterId), normalized);
     return clone(normalized);
 }
@@ -1001,10 +1607,10 @@ async function saveStateNow(characterId, state) {
     }
 
     try {
-        await ctx.writeExtensionField(characterId, MODULE_NAME, normalizeState(state));
+        await ctx.writeExtensionField(characterId, MODULE_NAME, normalizeCharacterState(state));
     } catch (error) {
         console.error(`[${MODULE_NAME}] Failed to save character extension data:`, error);
-        notify('error', 'Failed to save Aspect: Exolutia fields.');
+        notify('error', 'Failed to save Aspect: Evolutia character fields.');
     }
 }
 
@@ -1021,13 +1627,15 @@ function updateState(mutator, { rerender = false, syncPromptManager = false } = 
     const characterId = getActiveCharacterId();
 
     if (characterId === undefined) {
-        notify('warning', 'Select a character before editing Dynamic Fields.');
+        notify('warning', 'Select a character before editing Character Dynamic Fields.');
         return;
     }
 
     const state = readState(characterId);
     mutator(state);
-    scheduleSave(characterId, state);
+
+    const normalized = normalizeCharacterState(state);
+    scheduleSave(characterId, normalized);
 
     if (rerender) {
         renderPanel();
@@ -1036,11 +1644,155 @@ function updateState(mutator, { rerender = false, syncPromptManager = false } = 
     }
 
     if (syncPromptManager) {
-        syncPromptManagerForState(state);
+        syncPromptManagerForState(normalized);
     }
 
     updateTokenEstimate();
     updateSettingsActionState();
+}
+
+// -----------------------------------------------------------------------------
+// Persona Extension Persistence - Read and Cache
+// -----------------------------------------------------------------------------
+
+function readPersonaState(personaId = getActivePersonaId()) {
+    const key = getPersonaCacheKey(personaId);
+
+    if (personaStateCache.has(key)) {
+        return clone(personaStateCache.get(key));
+    }
+
+    const rawState = getPersonaExtensionStateRecord(personaId);
+    const state = normalizePersonaState(rawState);
+
+    personaStateCache.set(key, state);
+    return clone(state);
+}
+
+function cachePersonaState(personaId, state) {
+    const normalized = normalizePersonaState(state);
+    personaStateCache.set(getPersonaCacheKey(personaId), normalized);
+    return clone(normalized);
+}
+
+function clearPersonaStateCache(personaId = undefined) {
+    if (personaId === undefined || personaId === null || personaId === '') {
+        personaStateCache.clear();
+        return;
+    }
+
+    personaStateCache.delete(getPersonaCacheKey(personaId));
+}
+
+// -----------------------------------------------------------------------------
+// Persona Extension Persistence - Save
+// -----------------------------------------------------------------------------
+
+async function savePersonaStateNow(personaId, state) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    if (!normalizedPersonaId) {
+        return;
+    }
+
+    const normalizedState = normalizePersonaState(state);
+    const savedToSettings = setPersonaExtensionStateRecord(normalizedPersonaId, normalizedState);
+
+    if (!savedToSettings) {
+        notify('error', 'Persona settings are unavailable in this SillyTavern build.');
+        return;
+    }
+
+    cachePersonaState(normalizedPersonaId, normalizedState);
+
+    try {
+        const saveSettingsDebounced = getSaveSettingsDebounced();
+
+        if (typeof saveSettingsDebounced === 'function') {
+            saveSettingsDebounced();
+            return;
+        }
+
+        const ctx = getContext();
+
+        if (typeof ctx?.saveSettings === 'function') {
+            await ctx.saveSettings();
+            return;
+        }
+
+        if (typeof globalThis.saveSettings === 'function') {
+            await globalThis.saveSettings();
+            return;
+        }
+
+        if (typeof ctx?.saveSettingsDebounced === 'function') {
+            ctx.saveSettingsDebounced();
+            return;
+        }
+
+        console.warn(`[${MODULE_NAME}] Persona Dynamic Fields were cached, but no settings save hook was found.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to save persona extension data:`, error);
+        notify('error', 'Failed to save Aspect: Evolutia persona fields.');
+    }
+}
+
+function schedulePersonaSave(personaId, state) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    if (!normalizedPersonaId) {
+        return;
+    }
+
+    const normalized = cachePersonaState(normalizedPersonaId, state);
+
+    clearTimeout(personaSaveTimer);
+    personaSaveTimer = setTimeout(() => {
+        savePersonaStateNow(normalizedPersonaId, normalized);
+    }, 400);
+}
+
+function updatePersonaState(mutator, { rerender = false, syncPromptManager = false } = {}) {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before editing Persona Dynamic Fields.');
+        return;
+    }
+
+    const state = readPersonaState(personaId);
+    mutator(state);
+
+    const normalized = normalizePersonaState(state);
+    schedulePersonaSave(personaId, normalized);
+
+    if (rerender) {
+        renderPersonaPanel();
+    } else {
+        applyPersonaUiVisibility();
+    }
+
+    if (syncPromptManager) {
+        syncPromptManagerForPersonaState(normalized);
+    }
+
+    updatePersonaTokenEstimate();
+    updateSettingsActionState();
+}
+
+// -----------------------------------------------------------------------------
+// Character and Persona Extension Persistence - Bulk Cache Utilities
+// -----------------------------------------------------------------------------
+
+function clearAllStateCaches() {
+    stateCache.clear();
+    personaStateCache.clear();
+}
+
+function clearRuntimeCachesForCharacterAndPersona() {
+    clearAllStateCaches();
+    clearAllPreparedPrompts();
+    clearGenerationLifecycle();
 }
 
 // ============================================================================
@@ -1048,7 +1800,6 @@ function updateState(mutator, { rerender = false, syncPromptManager = false } = 
 // ============================================================================
 // Purpose:
 // - Own trigger source text collection for Dynamic Field trigger matching.
-// - Other components may call buildScanText to evaluate selected trigger sources.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -1366,7 +2117,6 @@ function buildScanText(triggerSources = DEFAULT_TRIGGER_SOURCES, chatOverride = 
 // ============================================================================
 // Purpose:
 // - Own keyword matching, trigger-action handling, prepared prompt text, and macro reads.
-// - Prompt Interceptor code prepares output; the macro only reads prepared output.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -1396,8 +2146,8 @@ function triggerListMatches(rawTriggers, scanText, keywordMode = KEYWORD_MODE.AL
     return loweredTriggers.some((trigger) => scanText.includes(trigger));
 }
 
-function activationTriggersAreSatisfied(field, scanText) {
-    const normalized = normalizeField(field);
+function activationTriggersAreSatisfied(field, scanText, options = {}) {
+    const normalized = normalizeField(field, options);
     const triggers = splitKeywords(normalized.activatingTriggers);
 
     if (!triggers.length) {
@@ -1411,8 +2161,8 @@ function activationTriggersAreSatisfied(field, scanText) {
     );
 }
 
-function activationTriggersFired(field, scanText) {
-    const normalized = normalizeField(field);
+function activationTriggersFired(field, scanText, options = {}) {
+    const normalized = normalizeField(field, options);
 
     if (!splitKeywords(normalized.activatingTriggers).length) {
         return false;
@@ -1429,21 +2179,56 @@ function activationTriggersFired(field, scanText) {
 // Dynamic Field Matching and Prompt Assembly - Prepared Prompt Cache
 // -----------------------------------------------------------------------------
 
-function setPreparedPrompt(characterId, generationId, prompt) {
-    preparedPromptCache.set(getCacheKey(characterId), {
-        characterId,
+function getPreparedPromptCacheKey(targetScope = TARGET_SCOPE.CHARACTER, entityId = undefined) {
+    const scope = targetScope === TARGET_SCOPE.PERSONA ? TARGET_SCOPE.PERSONA : TARGET_SCOPE.CHARACTER;
+
+    if (scope === TARGET_SCOPE.PERSONA) {
+        return `${scope}:${getPersonaCacheKey(entityId)}`;
+    }
+
+    return `${scope}:${getCacheKey(entityId)}`;
+}
+
+function setPreparedPromptForTarget(targetScope, entityId, generationId, prompt) {
+    preparedPromptCache.set(getPreparedPromptCacheKey(targetScope, entityId), {
+        targetScope,
+        entityId,
         generationId,
         prompt: String(prompt || ''),
     });
 }
 
-function getPreparedPrompt(characterId = getMacroCharacterId()) {
-    const prepared = preparedPromptCache.get(getCacheKey(characterId));
+function getPreparedPromptForTarget(targetScope, entityId) {
+    const prepared = preparedPromptCache.get(getPreparedPromptCacheKey(targetScope, entityId));
     return String(prepared?.prompt || '');
 }
 
+function clearPreparedPromptForTarget(targetScope, entityId) {
+    preparedPromptCache.delete(getPreparedPromptCacheKey(targetScope, entityId));
+}
+
+function setPreparedPrompt(characterId, generationId, prompt) {
+    setPreparedPromptForTarget(TARGET_SCOPE.CHARACTER, characterId, generationId, prompt);
+}
+
+function getPreparedPrompt(characterId = getMacroCharacterId()) {
+    return getPreparedPromptForTarget(TARGET_SCOPE.CHARACTER, characterId);
+}
+
 function clearPreparedPrompt(characterId = getMacroCharacterId()) {
-    preparedPromptCache.delete(getCacheKey(characterId));
+    clearPreparedPromptForTarget(TARGET_SCOPE.CHARACTER, characterId);
+}
+
+function setPreparedPersonaPrompt(personaId, generationId, prompt) {
+    setPreparedPromptForTarget(TARGET_SCOPE.PERSONA, personaId, generationId, prompt);
+}
+
+function getPreparedPersonaPrompt(personaId = getMacroPersonaId()) {
+    return getPreparedPromptForTarget(TARGET_SCOPE.PERSONA, personaId);
+}
+
+function clearPreparedPersonaPrompt(personaId = getMacroPersonaId()) {
+    clearPreparedPromptForTarget(TARGET_SCOPE.PERSONA, personaId);
 }
 
 function clearAllPreparedPrompts() {
@@ -1483,7 +2268,7 @@ function markContentReadyForNextGeneration(field, generationId, enabledByGenerat
 }
 
 function isActionInjectedForThisGeneration(field, generationId) {
-    const normalized = normalizeField(field);
+    const normalized = normalizeCharacterField(field);
 
     return (
         normalized.triggerActionPhase === TRIGGER_ACTION_PHASE.ACTION_INJECTED &&
@@ -1492,7 +2277,7 @@ function isActionInjectedForThisGeneration(field, generationId) {
 }
 
 function isActionInjectedFromEarlierGeneration(field, generationId) {
-    const normalized = normalizeField(field);
+    const normalized = normalizeCharacterField(field);
 
     return (
         normalized.triggerActionPhase === TRIGGER_ACTION_PHASE.ACTION_INJECTED &&
@@ -1502,7 +2287,7 @@ function isActionInjectedFromEarlierGeneration(field, generationId) {
 }
 
 function isContentReadyForThisGeneration(field, generationId) {
-    const normalized = normalizeField(field);
+    const normalized = normalizeCharacterField(field);
 
     return (
         normalized.triggerActionPhase === TRIGGER_ACTION_PHASE.CONTENT_READY &&
@@ -1511,7 +2296,7 @@ function isContentReadyForThisGeneration(field, generationId) {
 }
 
 function isContentLockedUntilNextGeneration(field, generationId) {
-    const normalized = normalizeField(field);
+    const normalized = normalizeCharacterField(field);
 
     return (
         normalized.triggerActionPhase === TRIGGER_ACTION_PHASE.CONTENT_READY &&
@@ -1524,19 +2309,23 @@ function isContentLockedUntilNextGeneration(field, generationId) {
 // -----------------------------------------------------------------------------
 
 function buildFieldPromptEntriesForGeneration(state, {
+    targetScope = TARGET_SCOPE.CHARACTER,
     characterId,
+    personaId,
     generationId,
     chat,
     mutate = false,
 } = {}) {
     const entries = [];
     let changed = false;
+    const isPersona = targetScope === TARGET_SCOPE.PERSONA;
+    const normalizeForTarget = isPersona ? normalizePersonaField : normalizeCharacterField;
 
     for (const field of state.fields) {
-        const normalized = normalizeField(field);
+        const normalized = normalizeForTarget(field);
         const scanText = buildScanText(normalized.triggerSources, chat);
         const content = normalized.content.trim();
-        const triggerActionInstruction = normalized.triggerActionInstruction.trim();
+        const triggerActionInstruction = isPersona ? '' : normalized.triggerActionInstruction.trim();
 
         const disablingTriggered = triggerListMatches(
             normalized.disablingTriggers,
@@ -1566,23 +2355,35 @@ function buildFieldPromptEntriesForGeneration(state, {
         );
 
         const enablingTransition = normalized.enabled === false && enablingTriggered;
-        const activatingTriggered = activationTriggersFired(normalized, scanText);
-        const activationSatisfied = activationTriggersAreSatisfied(normalized, scanText);
+        const activatingTriggered = activationTriggersFired(normalized, scanText, {
+            targetScope,
+            includeTriggerActions: !isPersona,
+        });
+        const activationSatisfied = activationTriggersAreSatisfied(normalized, scanText, {
+            targetScope,
+            includeTriggerActions: !isPersona,
+        });
 
         // Enabling Triggers turn Inject on.
         //
-        // If Trigger Actions has text, Trigger Action must inject first and Content
-        // must wait until the next completed generation.
+        // Characters:
+        // - If Trigger Actions has text, Trigger Action must inject first and Content
+        //   must wait until the next completed generation.
+        // - If Trigger Actions is empty, Content may inject immediately if normal
+        //   content conditions allow it.
         //
-        // If Trigger Actions is empty, there is no transition action to perform, so
-        // Content may inject immediately if the field's normal content conditions allow it.
+        // Personas:
+        // - Trigger Actions are intentionally unsupported.
+        // - Enabling Triggers simply turn Inject on, and Content may inject immediately
+        //   if normal content conditions allow it.
         if (enablingTransition) {
             if (mutate) {
                 applyMutableFieldState(field, { enabled: true });
+                resetTriggerActionLifecycle(field);
                 changed = true;
             }
 
-            if (triggerActionInstruction) {
+            if (!isPersona && triggerActionInstruction) {
                 entries.push(formatTriggerActionForPrompt(normalized, triggerActionInstruction));
 
                 if (mutate) {
@@ -1594,6 +2395,18 @@ function buildFieldPromptEntriesForGeneration(state, {
             }
 
             if (content && activationSatisfied) {
+                entries.push(formatFieldForPrompt(normalized));
+            }
+
+            continue;
+        }
+
+        if (isPersona) {
+            if (!normalized.enabled || !content) {
+                continue;
+            }
+
+            if (activationSatisfied) {
                 entries.push(formatFieldForPrompt(normalized));
             }
 
@@ -1652,8 +2465,8 @@ function buildFieldPromptEntriesForGeneration(state, {
             continue;
         }
 
-        // Activating Triggers can fire Trigger Action repeatedly, but still block
-        // same-generation Content when Trigger Action text exists.
+        // Character Activating Triggers can fire Trigger Action repeatedly, but still
+        // block same-generation Content when Trigger Action text exists.
         if (triggerActionInstruction && activatingTriggered) {
             entries.push(formatTriggerActionForPrompt(normalized, triggerActionInstruction));
 
@@ -1697,11 +2510,11 @@ function formatFieldForPrompt(field) {
 }
 
 function formatTriggerActionForPrompt(field, instruction) {
-    const normalized = normalizeField(field);
+    const normalized = normalizeCharacterField(field);
 
     return [
         `[TRIGGER ACTION]`,
-		`You must ensure the following actions occur:`,
+        `You must ensure the following actions occur:`,
         instruction.trim(),
         `[END TRIGGER ACTION]`,
     ].join('\n');
@@ -1720,6 +2533,23 @@ function wrapDynamicFieldsPrompt(characterId, fieldText) {
     ].join('\n');
 }
 
+function wrapPersonaDynamicFieldsPrompt(personaId, fieldText) {
+    const personaName = getPersonaName(personaId);
+
+    return [
+        `[USER PERSONA DEFINITIONS]`,
+        `These definitions apply only to ${personaName}.`,
+        '',
+        fieldText,
+        '',
+        `[END USER PERSONA DEFINITIONS]`,
+    ].join('\n');
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Field Matching and Prompt Assembly - Character Prompt Preparation
+// -----------------------------------------------------------------------------
+
 function prepareReplacementPromptForGeneration(characterId, generationId, chat, { mutate = true } = {}) {
     const state = readState(characterId);
 
@@ -1728,6 +2558,7 @@ function prepareReplacementPromptForGeneration(characterId, generationId, chat, 
     }
 
     const { entries, changed } = buildFieldPromptEntriesForGeneration(state, {
+        targetScope: TARGET_SCOPE.CHARACTER,
         characterId,
         generationId,
         chat,
@@ -1759,6 +2590,10 @@ function buildReplacementPrompt(characterId = getActiveCharacterId()) {
 }
 
 function buildAspectEvolutiaMacroValue() {
+    return buildAspectEvolutiaCharacterMacroValue();
+}
+
+function buildAspectEvolutiaCharacterMacroValue() {
     const characterId = getMacroCharacterId();
     const character = getCharacter(characterId);
 
@@ -1775,30 +2610,111 @@ function buildAspectEvolutiaMacroValue() {
     return getPreparedPrompt(characterId);
 }
 
+// -----------------------------------------------------------------------------
+// Dynamic Field Matching and Prompt Assembly - Persona Prompt Preparation
+// -----------------------------------------------------------------------------
+
+function preparePersonaReplacementPromptForGeneration(personaId, generationId, chat, { mutate = true } = {}) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    if (!normalizedPersonaId) {
+        return '';
+    }
+
+    const state = readPersonaState(normalizedPersonaId);
+
+    if (!state.swapEnabled) {
+        return '';
+    }
+
+    const { entries, changed } = buildFieldPromptEntriesForGeneration(state, {
+        targetScope: TARGET_SCOPE.PERSONA,
+        personaId: normalizedPersonaId,
+        generationId,
+        chat,
+        mutate,
+    });
+
+    if (mutate && changed) {
+        schedulePersonaSave(normalizedPersonaId, state);
+
+        setTimeout(() => {
+            renderPersonaPanel();
+            updatePersonaTokenEstimate();
+            updateSettingsActionState();
+        }, 0);
+    }
+
+    if (!entries.length) {
+        return '';
+    }
+
+    return wrapPersonaDynamicFieldsPrompt(
+        normalizedPersonaId,
+        entries.join('\n\n'),
+    );
+}
+
+function buildPersonaReplacementPrompt(personaId = getActivePersonaId()) {
+    return getPreparedPersonaPrompt(personaId);
+}
+
+function buildAspectEvolutiaPersonaMacroValue() {
+    const personaId = getMacroPersonaId();
+
+    if (!personaId) {
+        return '';
+    }
+
+    const state = readPersonaState(personaId);
+
+    if (!state.swapEnabled) {
+        return getNativePersonaDescriptionForPersona(personaId);
+    }
+
+    return getPreparedPersonaPrompt(personaId);
+}
+
 // ============================================================================
 // Section 9. Prompt Manager Integration
 // ============================================================================
 // Purpose:
-// - Own the custom Prompt Manager prompt and macro used as Description replacement.
-// - Dynamic Fields toggles may call this to switch between native Description and Aspect.
-// - This section must NOT mutate SillyTavern's native Description field.
+// - Own the custom Prompt Manager prompts and macros used as Description replacements.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
 // Prompt Manager Integration - Macro Registration
 // -----------------------------------------------------------------------------
 
-function registerAspectMacro() {
+function safelyRegisterMacro(name, handler, description) {
     try {
-        MacrosParser.registerMacro(
-            ASPECT_MACRO_NAME,
-            () => buildAspectEvolutiaMacroValue(),
-            'Aspect: Evolutia effective character Description. Returns Dynamic Fields when enabled, otherwise the native Description.',
-        );
+        MacrosParser.registerMacro(name, handler, description);
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to register macro:`, error);
-        notify('error', 'Failed to register Aspect: Evolutia macro.');
+        console.error(`[${MODULE_NAME}] Failed to register macro "${name}":`, error);
+        notify('error', `Failed to register Aspect: Evolutia macro "${name}".`);
     }
+}
+
+function registerAspectMacro() {
+    safelyRegisterMacro(
+        CHARACTER_ASPECT_MACRO_NAME,
+        () => buildAspectEvolutiaCharacterMacroValue(),
+        'Aspect: Evolutia effective Character Description. Returns Character Dynamic Fields when enabled, otherwise the native Character Description.',
+    );
+
+    safelyRegisterMacro(
+        PERSONA_ASPECT_MACRO_NAME,
+        () => buildAspectEvolutiaPersonaMacroValue(),
+        'Aspect: Evolutia effective Persona Description. Returns Persona Dynamic Fields when enabled, otherwise the native Persona Description.',
+    );
+
+    // Compatibility alias for earlier builds that used {{aspectEvolutiaDescription}}.
+    // New Prompt Manager entries use {{aspectEvolutiaCharDescription}}.
+    safelyRegisterMacro(
+        'aspectEvolutiaDescription',
+        () => buildAspectEvolutiaCharacterMacroValue(),
+        'Legacy Aspect: Evolutia Character Description macro. Prefer {{aspectEvolutiaCharDescription}}.',
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -1843,17 +2759,63 @@ function getPromptOrderEntryById(order, identifier) {
     return order.find((entry) => entry?.identifier === identifier) ?? null;
 }
 
+function getPromptByName(manager, name) {
+    if (!manager || !name) {
+        return null;
+    }
+
+    if (typeof manager.getPromptCollection === 'function') {
+        const collection = manager.getPromptCollection();
+
+        if (collection && typeof collection === 'object') {
+            const prompts = Array.isArray(collection)
+                ? collection
+                : Object.values(collection);
+
+            const found = prompts.find((prompt) => String(prompt?.name || '') === name);
+
+            if (found) {
+                return found;
+            }
+        }
+    }
+
+    const serviceSettingsPrompts = manager.serviceSettings?.prompts;
+
+    if (serviceSettingsPrompts && typeof serviceSettingsPrompts === 'object') {
+        const prompts = Array.isArray(serviceSettingsPrompts)
+            ? serviceSettingsPrompts
+            : Object.values(serviceSettingsPrompts);
+
+        const found = prompts.find((prompt) => String(prompt?.name || '') === name);
+
+        if (found) {
+            return found;
+        }
+    }
+
+    return null;
+}
+
+function getPromptIdentifier(prompt, fallbackIdentifier = '') {
+    return String(
+        prompt?.identifier ??
+        prompt?.id ??
+        prompt?.name ??
+        fallbackIdentifier ??
+        '',
+    );
+}
+
 // -----------------------------------------------------------------------------
-// Prompt Manager Integration - Prompt Creation and Toggling
+// Prompt Manager Integration - Prompt Creation
 // -----------------------------------------------------------------------------
 
-function ensureAspectPromptExists(manager) {
-    const existingPrompt = manager.getPromptById?.(ASPECT_PROMPT_ID);
-
-    const promptData = {
-        name: ASPECT_PROMPT_NAME,
+function getAspectPromptData({ name, macroText }) {
+    return {
+        name,
         role: 'system',
-        content: ASPECT_MACRO_TEXT,
+        content: macroText,
         system_prompt: false,
         marker: false,
         extension: true,
@@ -1861,46 +2823,152 @@ function ensureAspectPromptExists(manager) {
         injection_depth: 4,
         forbid_overrides: false,
     };
+}
+
+function ensurePromptExists(manager, promptId, promptData) {
+    const existingPrompt = manager.getPromptById?.(promptId);
 
     if (existingPrompt) {
         Object.assign(existingPrompt, promptData);
         return existingPrompt;
     }
 
-    manager.addPrompt(promptData, ASPECT_PROMPT_ID);
-    return manager.getPromptById?.(ASPECT_PROMPT_ID);
+    manager.addPrompt(promptData, promptId);
+    return manager.getPromptById?.(promptId);
 }
 
-function ensureAspectPromptOrderEntry(manager) {
+function ensureCharacterAspectPromptExists(manager) {
+    return ensurePromptExists(
+        manager,
+        CHARACTER_ASPECT_PROMPT_ID,
+        getAspectPromptData({
+            name: CHARACTER_ASPECT_PROMPT_NAME,
+            macroText: CHARACTER_ASPECT_MACRO_TEXT,
+        }),
+    );
+}
+
+function ensurePersonaAspectPromptExists(manager) {
+    return ensurePromptExists(
+        manager,
+        PERSONA_ASPECT_PROMPT_ID,
+        getAspectPromptData({
+            name: PERSONA_ASPECT_PROMPT_NAME,
+            macroText: PERSONA_ASPECT_MACRO_TEXT,
+        }),
+    );
+}
+
+function ensureAspectPromptExists(manager) {
+    return ensureCharacterAspectPromptExists(manager);
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Prompt Ordering
+// -----------------------------------------------------------------------------
+
+function ensurePromptOrderEntryNearNative(manager, {
+    aspectPromptId,
+    nativePromptId,
+    fallbackPromptId,
+    insertAfterFallback = false,
+} = {}) {
     const order = getPromptOrder(manager);
 
-    if (!order.length) {
+    if (!order.length || !aspectPromptId) {
         return null;
     }
 
-    const existingAspectIndex = order.findIndex((entry) => entry?.identifier === ASPECT_PROMPT_ID);
+    const existingAspectIndex = order.findIndex((entry) => entry?.identifier === aspectPromptId);
 
     if (existingAspectIndex >= 0) {
         return order[existingAspectIndex];
     }
 
-    const nativeIndex = order.findIndex((entry) => entry?.identifier === NATIVE_DESCRIPTION_PROMPT_ID);
-    const personaIndex = order.findIndex((entry) => entry?.identifier === 'personaDescription');
+    const nativeIndex = nativePromptId
+        ? order.findIndex((entry) => entry?.identifier === nativePromptId)
+        : -1;
 
-    const insertIndex = nativeIndex >= 0
-        ? nativeIndex
-        : personaIndex >= 0
-            ? personaIndex + 1
-            : 0;
+    const fallbackIndex = fallbackPromptId
+        ? order.findIndex((entry) => entry?.identifier === fallbackPromptId)
+        : -1;
+
+    let insertIndex = 0;
+
+    if (nativeIndex >= 0) {
+        insertIndex = nativeIndex;
+    } else if (fallbackIndex >= 0) {
+        insertIndex = fallbackIndex + (insertAfterFallback ? 1 : 0);
+    }
 
     const aspectEntry = {
-        identifier: ASPECT_PROMPT_ID,
+        identifier: aspectPromptId,
         enabled: false,
     };
 
     order.splice(insertIndex, 0, aspectEntry);
     return aspectEntry;
 }
+
+function ensureCharacterAspectPromptOrderEntry(manager) {
+    return ensurePromptOrderEntryNearNative(manager, {
+        aspectPromptId: CHARACTER_ASPECT_PROMPT_ID,
+        nativePromptId: NATIVE_DESCRIPTION_PROMPT_ID,
+        fallbackPromptId: 'personaDescription',
+        insertAfterFallback: true,
+    });
+}
+
+function ensurePersonaAspectPromptOrderEntry(manager) {
+    return ensurePromptOrderEntryNearNative(manager, {
+        aspectPromptId: PERSONA_ASPECT_PROMPT_ID,
+        nativePromptId: NATIVE_PERSONA_PROMPT_ID,
+        fallbackPromptId: NATIVE_DESCRIPTION_PROMPT_ID,
+        insertAfterFallback: false,
+    });
+}
+
+function ensureAspectPromptOrderEntry(manager) {
+    return ensureCharacterAspectPromptOrderEntry(manager);
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Legacy Prompt Cleanup
+// -----------------------------------------------------------------------------
+
+function disableLegacyAspectPromptIfPresent(manager) {
+    const order = getPromptOrder(manager);
+
+    if (!order.length) {
+        return;
+    }
+
+    const legacyPromptIds = new Set([
+        'aspectEvolutiaDescription',
+    ]);
+
+    for (const entry of order) {
+        const identifier = String(entry?.identifier || '');
+
+        if (legacyPromptIds.has(identifier)) {
+            entry.enabled = false;
+            continue;
+        }
+
+        const prompt = manager.getPromptById?.(identifier);
+
+        if (
+            String(prompt?.name || '') === 'Aspect: Evolutia Description' ||
+            String(prompt?.content || '').trim() === '{{aspectEvolutiaDescription}}'
+        ) {
+            entry.enabled = false;
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Prompt Manager Save / Render
+// -----------------------------------------------------------------------------
 
 async function saveAndRenderPromptManager(manager) {
     if (typeof manager.saveServiceSettings === 'function') {
@@ -1912,16 +2980,20 @@ async function saveAndRenderPromptManager(manager) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Character Prompt Toggling
+// -----------------------------------------------------------------------------
+
 async function syncPromptManagerForState(state) {
     const manager = getPromptManagerInstance();
 
     if (!manager) {
-        notify('warning', 'Prompt Manager is unavailable. Dynamic Fields saved, but prompt toggles could not be synchronized.');
+        notify('warning', 'Prompt Manager is unavailable. Character Dynamic Fields saved, but prompt toggles could not be synchronized.');
         return;
     }
 
     try {
-        ensureAspectPromptExists(manager);
+        ensureCharacterAspectPromptExists(manager);
 
         const order = getPromptOrder(manager);
 
@@ -1930,11 +3002,89 @@ async function syncPromptManagerForState(state) {
             return;
         }
 
-        const aspectEntry = ensureAspectPromptOrderEntry(manager);
+        const aspectEntry = ensureCharacterAspectPromptOrderEntry(manager);
         const nativeEntry = getPromptOrderEntryById(order, NATIVE_DESCRIPTION_PROMPT_ID);
 
         if (!aspectEntry) {
-            notify('warning', 'Could not create Aspect: Evolutia Prompt Manager entry.');
+            notify('warning', 'Could not create Char Description (Evolutia) Prompt Manager entry.');
+            return;
+        }
+
+        if (state.swapEnabled) {
+            aspectEntry.enabled = true;
+
+            if (nativeEntry) {
+                nativeEntry.enabled = false;
+            }
+        } else {
+            aspectEntry.enabled = false;
+
+            if (nativeEntry) {
+                nativeEntry.enabled = true;
+            }
+        }
+
+        disableLegacyAspectPromptIfPresent(manager);
+
+        await saveAndRenderPromptManager(manager);
+        updateSettingsActionState();
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to synchronize Character Prompt Manager entry:`, error);
+        notify('error', 'Failed to synchronize Character Dynamic Fields with Prompt Manager.');
+    }
+}
+
+async function syncPromptManagerWithActiveState() {
+    const characterId = getActiveCharacterId();
+
+    if (characterId === undefined) {
+        return;
+    }
+
+    const state = readState(characterId);
+    await syncPromptManagerForState(state);
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Persona Prompt Toggling
+// -----------------------------------------------------------------------------
+
+async function syncPromptManagerForPersonaState(state) {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        return;
+    }
+
+    const manager = getPromptManagerInstance();
+
+    if (!manager) {
+        notify('warning', 'Prompt Manager is unavailable. Persona Dynamic Fields saved, but prompt toggles could not be synchronized.');
+        return;
+    }
+
+    if (state.swapEnabled && !isPersonaDescriptionInPromptManagerPosition(personaId)) {
+        notify(
+            'warning',
+            'Persona Dynamic Fields currently support only the Persona Description Prompt Manager / story-string position. Switch the Persona Description position to Prompt Manager for injection.',
+        );
+    }
+
+    try {
+        ensurePersonaAspectPromptExists(manager);
+
+        const order = getPromptOrder(manager);
+
+        if (!order.length) {
+            notify('warning', 'Prompt Manager order is unavailable. Open Chat Completion Presets and try again.');
+            return;
+        }
+
+        const aspectEntry = ensurePersonaAspectPromptOrderEntry(manager);
+        const nativeEntry = getPromptOrderEntryById(order, NATIVE_PERSONA_PROMPT_ID);
+
+        if (!aspectEntry) {
+            notify('warning', 'Could not create Persona Description (Evolutia) Prompt Manager entry.');
             return;
         }
 
@@ -1955,20 +3105,29 @@ async function syncPromptManagerForState(state) {
         await saveAndRenderPromptManager(manager);
         updateSettingsActionState();
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to synchronize Prompt Manager:`, error);
-        notify('error', 'Failed to synchronize Aspect: Evolutia with Prompt Manager.');
+        console.error(`[${MODULE_NAME}] Failed to synchronize Persona Prompt Manager entry:`, error);
+        notify('error', 'Failed to synchronize Persona Dynamic Fields with Prompt Manager.');
     }
 }
 
-async function syncPromptManagerWithActiveState() {
-    const characterId = getActiveCharacterId();
+async function syncPromptManagerWithActivePersonaState() {
+    const personaId = getActivePersonaId();
 
-    if (characterId === undefined) {
+    if (!personaId) {
         return;
     }
 
-    const state = readState(characterId);
-    await syncPromptManagerForState(state);
+    const state = readPersonaState(personaId);
+    await syncPromptManagerForPersonaState(state);
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Manager Integration - Combined Sync Helpers
+// -----------------------------------------------------------------------------
+
+async function syncPromptManagerWithActiveStates() {
+    await syncPromptManagerWithActiveState();
+    await syncPromptManagerWithActivePersonaState();
 }
 
 // ============================================================================
@@ -1976,8 +3135,6 @@ async function syncPromptManagerWithActiveState() {
 // ============================================================================
 // Purpose:
 // - Own cleanup for legacy in-memory Description suppression backups.
-// - Generation flow may call this defensively if older runtime state exists.
-// - This section must NOT suppress or overwrite Description anymore.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2023,38 +3180,24 @@ function restoreSuppressedDescriptions() {
 // Section 11. Dynamic Token Estimate
 // ============================================================================
 // Purpose:
-// - Own the local Dynamic Fields token badge shown when Dynamic Fields are active.
-// - UI and input handlers may call this after field/input changes.
-// - Token previews must be read-only and must not mutate trigger/action state.
+// - Own the local Dynamic Fields token badges shown when Dynamic Fields are active.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// Dynamic Token Estimate - Preview Prompt
+// Dynamic Token Estimate - Shared Preview Helpers
 // -----------------------------------------------------------------------------
 
-function buildDynamicTokenPreviewPrompt(characterId = getActiveCharacterId()) {
-    const state = readState(characterId);
-
-    if (!state.swapEnabled) {
-        return '';
-    }
-
-    const ctx = getContext();
-    const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
-    const previewGenerationId = currentGenerationId || generationSerial + 1;
-
-    return prepareReplacementPromptForGeneration(characterId, previewGenerationId, chat, {
-        mutate: false,
-    });
+function getPreviewGenerationId() {
+    return currentGenerationId || generationSerial + 1;
 }
 
-// -----------------------------------------------------------------------------
-// Dynamic Token Estimate - Calculation
-// -----------------------------------------------------------------------------
-
-async function getDynamicTokenCount(characterId = getActiveCharacterId()) {
+function getCurrentChatForTokenPreview() {
     const ctx = getContext();
-    const prompt = buildDynamicTokenPreviewPrompt(characterId);
+    return Array.isArray(ctx?.chat) ? ctx.chat : [];
+}
+
+async function getTokenCountForPrompt(prompt) {
+    const ctx = getContext();
 
     if (!prompt) {
         return 0;
@@ -2068,17 +3211,93 @@ async function getDynamicTokenCount(characterId = getActiveCharacterId()) {
 }
 
 // -----------------------------------------------------------------------------
-// Dynamic Token Estimate - Rendering
+// Dynamic Token Estimate - Character Preview Prompt
+// -----------------------------------------------------------------------------
+
+function buildDynamicTokenPreviewPrompt(characterId = getActiveCharacterId()) {
+    if (characterId === undefined || characterId === null || characterId === '') {
+        return '';
+    }
+
+    const state = readState(characterId);
+
+    if (!state.swapEnabled) {
+        return '';
+    }
+
+    return prepareReplacementPromptForGeneration(
+        characterId,
+        getPreviewGenerationId(),
+        getCurrentChatForTokenPreview(),
+        {
+            mutate: false,
+        },
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Token Estimate - Persona Preview Prompt
+// -----------------------------------------------------------------------------
+
+function buildPersonaDynamicTokenPreviewPrompt(personaId = getActivePersonaId()) {
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    if (!normalizedPersonaId) {
+        return '';
+    }
+
+    const state = readPersonaState(normalizedPersonaId);
+
+    if (!state.swapEnabled) {
+        return '';
+    }
+
+    return preparePersonaReplacementPromptForGeneration(
+        normalizedPersonaId,
+        getPreviewGenerationId(),
+        getCurrentChatForTokenPreview(),
+        {
+            mutate: false,
+        },
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Token Estimate - Character Calculation
+// -----------------------------------------------------------------------------
+
+async function getDynamicTokenCount(characterId = getActiveCharacterId()) {
+    const prompt = buildDynamicTokenPreviewPrompt(characterId);
+    return getTokenCountForPrompt(prompt);
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Token Estimate - Persona Calculation
+// -----------------------------------------------------------------------------
+
+async function getPersonaDynamicTokenCount(personaId = getActivePersonaId()) {
+    const prompt = buildPersonaDynamicTokenPreviewPrompt(personaId);
+    return getTokenCountForPrompt(prompt);
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Token Estimate - Character Rendering
 // -----------------------------------------------------------------------------
 
 async function updateTokenEstimate() {
     const characterId = getActiveCharacterId();
-    const state = readState(characterId);
     const $token = $(`#${UI.TOKEN_ID}`);
 
     if (!$token.length) {
         return;
     }
+
+    if (characterId === undefined || characterId === null || characterId === '') {
+        $token.text('');
+        return;
+    }
+
+    const state = readState(characterId);
 
     if (!state.swapEnabled) {
         $token.text('');
@@ -2106,7 +3325,57 @@ async function updateTokenEstimate() {
             return;
         }
 
-        console.warn(`[${MODULE_NAME}] Failed to estimate Dynamic Fields tokens:`, error);
+        console.warn(`[${MODULE_NAME}] Failed to estimate Character Dynamic Fields tokens:`, error);
+        $token.text('Tokens: unavailable');
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Dynamic Token Estimate - Persona Rendering
+// -----------------------------------------------------------------------------
+
+async function updatePersonaTokenEstimate() {
+    const personaId = getActivePersonaId();
+    const $token = $(`#${UI.PERSONA_TOKEN_ID}`);
+
+    if (!$token.length) {
+        return;
+    }
+
+    if (!personaId) {
+        $token.text('');
+        return;
+    }
+
+    const state = readPersonaState(personaId);
+
+    if (!state.swapEnabled) {
+        $token.text('');
+        return;
+    }
+
+    const serial = ++personaTokenUpdateSerial;
+    $token.text('Tokens: …');
+
+    try {
+        const count = await getPersonaDynamicTokenCount(personaId);
+
+        if (serial !== personaTokenUpdateSerial) {
+            return;
+        }
+
+        if (count === null) {
+            $token.text('Tokens: unavailable');
+            return;
+        }
+
+        $token.text(`Tokens: ${count}`);
+    } catch (error) {
+        if (serial !== personaTokenUpdateSerial) {
+            return;
+        }
+
+        console.warn(`[${MODULE_NAME}] Failed to estimate Persona Dynamic Fields tokens:`, error);
         $token.text('Tokens: unavailable');
     }
 }
@@ -2115,8 +3384,8 @@ async function updateTokenEstimate() {
 // Section 12. Import / Export
 // ============================================================================
 // Purpose:
-// - Own Import and Export menu actions for Dynamic Fields.
-// - This section must NOT alter native Description or native Personality.
+// - Own Import and Export menu actions for Character Dynamic Fields.
+// - Own Import and Export menu actions for Persona Dynamic Fields.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2127,15 +3396,25 @@ function buildDynamicFieldsExportPayload(characterId = getActiveCharacterId()) {
     const state = readState(characterId);
 
     return {
-        fields: state.fields.map(exportFieldForJson),
+        type: 'aspect_evolutia_character_dynamic_fields',
+        version: 1,
+        fields: state.fields.map(exportCharacterFieldForJson),
     };
 }
 
-function getFieldsFromDynamicFieldsPayload(payload) {
-    const source = typeof payload === 'string' ? JSON.parse(payload) : payload;
+function buildPersonaDynamicFieldsExportPayload(personaId = getActivePersonaId()) {
+    const state = readPersonaState(personaId);
 
+    return {
+        type: 'aspect_evolutia_persona_dynamic_fields',
+        version: 1,
+        fields: state.fields.map(exportPersonaFieldForJson),
+    };
+}
+
+function getFieldArrayFromPayloadSource(source) {
     if (Array.isArray(source)) {
-        return source.map(importFieldFromJson);
+        return source;
     }
 
     if (!source || typeof source !== 'object') {
@@ -2143,48 +3422,119 @@ function getFieldsFromDynamicFieldsPayload(payload) {
     }
 
     if (Array.isArray(source.fields)) {
-        return source.fields.map(importFieldFromJson);
+        return source.fields;
     }
 
-    const extensionState =
+    const directExtensionState =
         source?.data?.extensions?.[MODULE_NAME] ??
         source?.extensions?.[MODULE_NAME] ??
         source?.character?.data?.extensions?.[MODULE_NAME];
 
-    if (extensionState?.fields && Array.isArray(extensionState.fields)) {
-        return extensionState.fields.map(importFieldFromJson);
+    if (Array.isArray(directExtensionState?.fields)) {
+        return directExtensionState.fields;
+    }
+
+    const personaExtensionStates =
+        source?.[MODULE_NAME]?.[PERSONA_STATE_SETTINGS_KEY] ??
+        source?.settings?.[MODULE_NAME]?.[PERSONA_STATE_SETTINGS_KEY] ??
+        source?.power_user?.[MODULE_NAME]?.[PERSONA_STATE_SETTINGS_KEY];
+
+    if (personaExtensionStates && typeof personaExtensionStates === 'object') {
+        const allPersonaFields = Object.values(personaExtensionStates)
+            .flatMap((state) => Array.isArray(state?.fields) ? state.fields : []);
+
+        if (allPersonaFields.length) {
+            return allPersonaFields;
+        }
     }
 
     return [];
+}
+
+function parseDynamicFieldsPayload(payload) {
+    return typeof payload === 'string' ? JSON.parse(payload) : payload;
+}
+
+function getFieldsFromDynamicFieldsPayload(payload) {
+    const source = parseDynamicFieldsPayload(payload);
+    const fields = getFieldArrayFromPayloadSource(source);
+
+    return fields.map(importCharacterFieldFromJson);
+}
+
+function getPersonaFieldsFromDynamicFieldsPayload(payload) {
+    const source = parseDynamicFieldsPayload(payload);
+    const fields = getFieldArrayFromPayloadSource(source);
+
+    return fields.map(importPersonaFieldFromJson);
+}
+
+function filterImportableFields(fields) {
+    return Array.isArray(fields)
+        ? fields.map(normalizeField).filter((field) => field.content.trim() || field.name.trim())
+        : [];
+}
+
+function filterImportableCharacterFields(fields) {
+    return Array.isArray(fields)
+        ? fields.map(normalizeCharacterField).filter((field) => field.content.trim() || field.name.trim())
+        : [];
+}
+
+function filterImportablePersonaFields(fields) {
+    return Array.isArray(fields)
+        ? fields.map(normalizePersonaField).filter((field) => field.content.trim() || field.name.trim())
+        : [];
 }
 
 function appendImportedFieldsToActiveCharacter(fields, successMessage) {
     const characterId = getActiveCharacterId();
 
     if (characterId === undefined) {
-        notify('warning', 'Select a character before importing Dynamic Fields.');
+        notify('warning', 'Select a character before importing Character Dynamic Fields.');
         return;
     }
 
-    const normalizedFields = Array.isArray(fields)
-        ? fields.map(normalizeField).filter((field) => field.content.trim() || field.name.trim())
-        : [];
+    const normalizedFields = filterImportableCharacterFields(fields);
 
     if (!normalizedFields.length) {
-        notify('warning', 'No Dynamic Fields were found to import.');
+        notify('warning', 'No Character Dynamic Fields were found to import.');
         return;
     }
 
     updateState((state) => {
-        const importedFields = prepareImportedFields(normalizedFields, state.fields);
+        const importedFields = prepareImportedCharacterFields(normalizedFields, state.fields);
         state.fields.push(...importedFields);
     }, { rerender: true });
 
-    notify('success', successMessage || `Imported ${normalizedFields.length} Dynamic Field(s).`);
+    notify('success', successMessage || `Imported ${normalizedFields.length} Character Dynamic Field(s).`);
+}
+
+function appendImportedFieldsToActivePersona(fields, successMessage) {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before importing Persona Dynamic Fields.');
+        return;
+    }
+
+    const normalizedFields = filterImportablePersonaFields(fields);
+
+    if (!normalizedFields.length) {
+        notify('warning', 'No Persona Dynamic Fields were found to import.');
+        return;
+    }
+
+    updatePersonaState((state) => {
+        const importedFields = prepareImportedPersonaFields(normalizedFields, state.fields);
+        state.fields.push(...importedFields);
+    }, { rerender: true });
+
+    notify('success', successMessage || `Imported ${normalizedFields.length} Persona Dynamic Field(s).`);
 }
 
 // -----------------------------------------------------------------------------
-// Import / Export - Native Description / Personality Import
+// Import / Export - Native Character Description / Personality Import
 // -----------------------------------------------------------------------------
 
 function isLikelyNativeImportHeadingName(candidate, isStrongSyntax = false) {
@@ -2295,7 +3645,26 @@ function parseHeaderedNativeSections(text) {
 }
 
 function createFieldFromNativeImport(name, content) {
-    return normalizeField({
+    return normalizeCharacterField({
+        name,
+        activatingTriggers: '',
+        enablingTriggers: '',
+        disablingTriggers: '',
+        triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+        activatingKeywordMode: KEYWORD_MODE.ALL,
+        enablingKeywordMode: KEYWORD_MODE.ALL,
+        disablingKeywordMode: KEYWORD_MODE.ALL,
+        triggerActionInstruction: '',
+        triggerActionPhase: TRIGGER_ACTION_PHASE.IDLE,
+        triggerActionGenerationId: 0,
+        triggerActionEnabledByGeneration: false,
+        content,
+        enabled: true,
+    });
+}
+
+function createPersonaFieldFromNativeImport(name, content) {
+    return normalizePersonaField({
         name,
         activatingTriggers: '',
         enablingTriggers: '',
@@ -2342,8 +3711,29 @@ function buildNativeFieldImportsFromCharacter(character) {
     return importedFields;
 }
 
+function buildPersonaDescriptionImports(personaId = getActivePersonaId()) {
+    const description = getNativePersonaDescriptionForPersona(personaId);
+    const importedFields = [];
+
+    if (!description) {
+        return importedFields;
+    }
+
+    const descriptionSections = parseHeaderedNativeSections(description);
+
+    if (descriptionSections.length) {
+        for (const section of descriptionSections) {
+            importedFields.push(createPersonaFieldFromNativeImport(section.name, section.content));
+        }
+    } else {
+        importedFields.push(createPersonaFieldFromNativeImport('Background', description));
+    }
+
+    return importedFields;
+}
+
 // -----------------------------------------------------------------------------
-// Import / Export - Import Actions
+// Import / Export - Character Import Actions
 // -----------------------------------------------------------------------------
 
 function importDynamicFieldsFromCharacterCardFile() {
@@ -2366,10 +3756,10 @@ async function handleCharacterCardImportFileSelected(event) {
         const payload = JSON.parse(text);
         const fields = getFieldsFromDynamicFieldsPayload(payload);
 
-        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from character card.`);
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Character Dynamic Field(s) from character description.`);
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to import character card Dynamic Fields:`, error);
-        notify('error', 'Failed to import Dynamic Fields from character card JSON.');
+        console.error(`[${MODULE_NAME}] Failed to import character description Dynamic Fields:`, error);
+        notify('error', 'Failed to import Character Dynamic Fields from character description JSON.');
     } finally {
         $(`#${UI.CHARACTER_CARD_IMPORT_FILE_ID}`).val('');
     }
@@ -2387,10 +3777,10 @@ async function handleDynamicFieldsImportFileSelected(event) {
         const payload = JSON.parse(text);
         const fields = getFieldsFromDynamicFieldsPayload(payload);
 
-        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from JSON file.`);
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Character Dynamic Field(s) from JSON file.`);
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to import Dynamic Fields JSON file:`, error);
-        notify('error', 'Failed to import Dynamic Fields from JSON file.');
+        console.error(`[${MODULE_NAME}] Failed to import Character Dynamic Fields JSON file:`, error);
+        notify('error', 'Failed to import Character Dynamic Fields from JSON file.');
     } finally {
         $(`#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`).val('');
     }
@@ -2409,7 +3799,7 @@ function importDynamicFieldsFromNativeFields() {
 
     appendImportedFieldsToActiveCharacter(
         importedFields,
-        `Imported ${importedFields.length} Dynamic Field(s) from native fields.`,
+        `Imported ${importedFields.length} Character Dynamic Field(s) from native fields.`,
     );
 }
 
@@ -2418,47 +3808,141 @@ async function importDynamicFieldsFromClipboardJson() {
         const text = await readTextFromClipboard();
         const fields = getFieldsFromDynamicFieldsPayload(text);
 
-        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Dynamic Field(s) from clipboard JSON.`);
+        appendImportedFieldsToActiveCharacter(fields, `Imported ${fields.length} Character Dynamic Field(s) from clipboard JSON.`);
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to import clipboard Dynamic Fields:`, error);
-        notify('error', 'Failed to import Dynamic Fields from clipboard JSON.');
+        console.error(`[${MODULE_NAME}] Failed to import clipboard Character Dynamic Fields:`, error);
+        notify('error', 'Failed to import Character Dynamic Fields from clipboard JSON.');
     }
 }
 
 // -----------------------------------------------------------------------------
-// Import / Export - Export Actions
+// Import / Export - Persona Import Actions
+// -----------------------------------------------------------------------------
+
+function importPersonaDynamicFieldsFromFileJson() {
+    $(`#${UI.PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID}`).val('').trigger('click');
+}
+
+function importPersonaDynamicFieldsFromPersonaDescription() {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before importing Persona Description.');
+        return;
+    }
+
+    const importedFields = buildPersonaDescriptionImports(personaId);
+
+    appendImportedFieldsToActivePersona(
+        importedFields,
+        `Imported ${importedFields.length} Persona Dynamic Field(s) from Persona Description.`,
+    );
+}
+
+async function handlePersonaDynamicFieldsImportFileSelected(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+        return;
+    }
+
+    try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        const fields = getPersonaFieldsFromDynamicFieldsPayload(payload);
+
+        appendImportedFieldsToActivePersona(fields, `Imported ${fields.length} Persona Dynamic Field(s) from JSON file.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to import Persona Dynamic Fields JSON file:`, error);
+        notify('error', 'Failed to import Persona Dynamic Fields from JSON file.');
+    } finally {
+        $(`#${UI.PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID}`).val('');
+    }
+}
+
+async function importPersonaDynamicFieldsFromClipboardJson() {
+    try {
+        const text = await readTextFromClipboard();
+        const fields = getPersonaFieldsFromDynamicFieldsPayload(text);
+
+        appendImportedFieldsToActivePersona(fields, `Imported ${fields.length} Persona Dynamic Field(s) from clipboard JSON.`);
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to import clipboard Persona Dynamic Fields:`, error);
+        notify('error', 'Failed to import Persona Dynamic Fields from clipboard JSON.');
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Import / Export - Character Export Actions
 // -----------------------------------------------------------------------------
 
 function exportDynamicFieldsToFileJson() {
     const characterId = getActiveCharacterId();
 
     if (characterId === undefined) {
-        notify('warning', 'Select a character before exporting Dynamic Fields.');
+        notify('warning', 'Select a character before exporting Character Dynamic Fields.');
         return;
     }
 
     const characterName = getCharacterName(characterId);
     const payload = buildDynamicFieldsExportPayload(characterId);
 
-    downloadJsonFile(`${sanitizeFilename(characterName)}_aspect_evolutia_dynamic_fields.json`, payload);
-    notify('success', 'Exported Dynamic Fields JSON file.');
+    downloadJsonFile(`${sanitizeFilename(characterName)}_aspect_evolutia_character_dynamic_fields.json`, payload);
+    notify('success', 'Exported Character Dynamic Fields JSON file.');
 }
 
 async function exportDynamicFieldsToClipboardJson() {
     const characterId = getActiveCharacterId();
 
     if (characterId === undefined) {
-        notify('warning', 'Select a character before copying Dynamic Fields.');
+        notify('warning', 'Select a character before copying Character Dynamic Fields.');
         return;
     }
 
     try {
         const payload = buildDynamicFieldsExportPayload(characterId);
         await copyTextToClipboard(JSON.stringify(payload, null, 2));
-        notify('success', 'Copied Dynamic Fields JSON to clipboard.');
+        notify('success', 'Copied Character Dynamic Fields JSON to clipboard.');
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Failed to copy Dynamic Fields JSON:`, error);
-        notify('error', 'Failed to copy Dynamic Fields JSON to clipboard.');
+        console.error(`[${MODULE_NAME}] Failed to copy Character Dynamic Fields JSON:`, error);
+        notify('error', 'Failed to copy Character Dynamic Fields JSON to clipboard.');
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Import / Export - Persona Export Actions
+// -----------------------------------------------------------------------------
+
+function exportPersonaDynamicFieldsToFileJson() {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before exporting Persona Dynamic Fields.');
+        return;
+    }
+
+    const personaName = getPersonaName(personaId);
+    const payload = buildPersonaDynamicFieldsExportPayload(personaId);
+
+    downloadJsonFile(`${sanitizeFilename(personaName)}_aspect_evolutia_persona_dynamic_fields.json`, payload);
+    notify('success', 'Exported Persona Dynamic Fields JSON file.');
+}
+
+async function exportPersonaDynamicFieldsToClipboardJson() {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before copying Persona Dynamic Fields.');
+        return;
+    }
+
+    try {
+        const payload = buildPersonaDynamicFieldsExportPayload(personaId);
+        await copyTextToClipboard(JSON.stringify(payload, null, 2));
+        notify('success', 'Copied Persona Dynamic Fields JSON to clipboard.');
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Failed to copy Persona Dynamic Fields JSON:`, error);
+        notify('error', 'Failed to copy Persona Dynamic Fields JSON to clipboard.');
     }
 }
 
@@ -2467,8 +3951,6 @@ async function exportDynamicFieldsToClipboardJson() {
 // ============================================================================
 // Purpose:
 // - Own the Aspect: Evolutia settings drawer in SillyTavern's Extensions tab.
-// - Settings controls may reset or remove Dynamic Fields data.
-// - This section must NOT own character-card field editor rendering.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2506,27 +3988,27 @@ async function loadManifestMetadata() {
 }
 
 // -----------------------------------------------------------------------------
-// Extensions Drawer Settings - Actions
+// Extensions Drawer Settings - Character Actions
 // -----------------------------------------------------------------------------
 
 async function removeAllFieldsForAllCharacters() {
     const characterIds = getAllCharacterIds();
 
     if (!characterIds.length) {
-        notify('warning', 'No character cards were found in Character Management.');
+        notify('warning', 'No characters were found in Character Management.');
         updateSettingsActionState();
         return;
     }
 
     if (areFieldsRemovedForCharacters(characterIds)) {
-        notify('info', 'All Dynamic Fields are already removed from every character card.');
+        notify('info', 'All Character Dynamic Fields are already removed from every character.');
         updateSettingsActionState();
         return;
     }
 
     const confirmed = window.confirm(
-        'Remove all Dynamic Fields from all character cards in Character Management?\n\n' +
-        'This keeps each character’s Dynamic Fields toggle as it is, but removes every Dynamic Field from every character card.',
+        'Remove all Character Dynamic Fields from all characters in Character Management?\n\n' +
+        'This keeps each character’s Character Dynamic Fields toggle as it is, but removes every Character Dynamic Field from every character.',
     );
 
     if (!confirmed) {
@@ -2548,7 +4030,7 @@ async function removeAllFieldsForAllCharacters() {
     updateTokenEstimate();
     updateSettingsActionState();
 
-    notify('success', `Removed all Dynamic Fields from ${characterIds.length} character card(s).`);
+    notify('success', `Removed all Character Dynamic Fields from ${characterIds.length} character(s).`);
 }
 
 async function removeAllFieldsForCurrentChatCharacters() {
@@ -2556,7 +4038,7 @@ async function removeAllFieldsForCurrentChatCharacters() {
     const isGroup = isCurrentGroupChatOpen();
 
     if (!characterIds.length) {
-        notify('warning', 'Open a character or group chat before removing current Dynamic Fields.');
+        notify('warning', 'Open a character or group chat before removing current Character Dynamic Fields.');
         updateSettingsActionState();
         return;
     }
@@ -2565,8 +4047,8 @@ async function removeAllFieldsForCurrentChatCharacters() {
         notify(
             'info',
             isGroup
-                ? 'All Dynamic Fields are already removed from the current characters.'
-                : 'All Dynamic Fields are already removed from the current character.',
+                ? 'All Character Dynamic Fields are already removed from the current characters.'
+                : 'All Character Dynamic Fields are already removed from the current character.',
         );
         updateSettingsActionState();
         return;
@@ -2574,8 +4056,8 @@ async function removeAllFieldsForCurrentChatCharacters() {
 
     const confirmed = window.confirm(
         isGroup
-            ? 'Remove all Dynamic Fields from every character in the currently open group chat?\n\nThis keeps each character’s Dynamic Fields toggle as it is.'
-: 'Remove all Dynamic Fields from the character in the currently open chat?\n\nThis keeps the character’s Dynamic Fields toggle as it is.',
+            ? 'Remove all Character Dynamic Fields from every character in the currently open group chat?\n\nThis keeps each character’s Character Dynamic Fields toggle as they are.'
+            : 'Remove all Character Dynamic Fields from the character in the currently open chat?\n\nThis keeps the character’s Character Dynamic Fields toggle as it is.',
     );
 
     if (!confirmed) {
@@ -2599,8 +4081,8 @@ async function removeAllFieldsForCurrentChatCharacters() {
     notify(
         'success',
         isGroup
-            ? `Removed all Dynamic Fields from ${characterIds.length} current character(s).`
-            : 'Removed all Dynamic Fields from the current character.',
+            ? `Removed all Character Dynamic Fields from ${characterIds.length} current character(s).`
+            : 'Removed all Character Dynamic Fields from the current character.',
     );
 }
 
@@ -2608,20 +4090,20 @@ async function resetAllCharactersToOutOfBox() {
     const characterIds = getAllCharacterIds();
 
     if (!characterIds.length) {
-        notify('warning', 'No character cards were found in Character Management.');
+        notify('warning', 'No characters were found in Character Management.');
         updateSettingsActionState();
         return;
     }
 
     if (areCharactersOutOfBox(characterIds)) {
-        notify('info', 'Aspect: Evolutia is already reset for every character card.');
+        notify('info', 'Aspect: Evolutia is already reset for every character.');
         updateSettingsActionState();
         return;
     }
 
     const confirmed = window.confirm(
-        'Reset Aspect: Evolutia for all character cards in Character Management?\n\n' +
-        'This will turn Dynamic Fields off and restore the default Background, Personality, and Appearance fields.',
+        'Reset Aspect: Evolutia extension state for all characters in Character Management?\n\n' +
+        'This will turn Character Dynamic Fields off and restore the default Background, Personality, and Appearance fields for every character.',
     );
 
     if (!confirmed) {
@@ -2645,11 +4127,140 @@ async function resetAllCharactersToOutOfBox() {
     updateTokenEstimate();
     updateSettingsActionState();
 
-    notify('success', `Reset Aspect: Evolutia for ${characterIds.length} character card(s).`);
+    notify('success', `Reset Aspect: Evolutia extension state for ${characterIds.length} character(s).`);
 }
 
 // -----------------------------------------------------------------------------
-// Extensions Drawer Settings - Rendering
+// Extensions Drawer Settings - Persona Actions
+// -----------------------------------------------------------------------------
+
+async function removeAllFieldsForAllPersonas() {
+    const personaIds = getAllPersonaIds();
+
+    if (!personaIds.length) {
+        notify('warning', 'No personas were found in Persona Management.');
+        updateSettingsActionState();
+        return;
+    }
+
+    if (areFieldsRemovedForPersonas(personaIds)) {
+        notify('info', 'All Persona Dynamic Fields are already removed from every persona.');
+        updateSettingsActionState();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Remove all Persona Dynamic Fields from all personas?\n\n' +
+        'This keeps each persona’s Persona Dynamic Fields toggle as it is, but removes every Persona Dynamic Field from every persona.',
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    for (const personaId of personaIds) {
+        const nextState = createEmptyPersonaFieldsState(personaId);
+
+        cachePersonaState(personaId, nextState);
+        await savePersonaStateNow(personaId, nextState);
+    }
+
+    personaStateCache.clear();
+
+    renderPersonaPanel();
+    applyPersonaUiVisibility();
+    updatePersonaTokenEstimate();
+    updateSettingsActionState();
+
+    notify('success', `Removed all Persona Dynamic Fields from ${personaIds.length} persona(s).`);
+}
+
+async function removeAllFieldsForCurrentPersona() {
+    const personaIds = getCurrentPersonaIds();
+
+    if (!personaIds.length) {
+        notify('warning', 'Select a persona before removing current Persona Dynamic Fields.');
+        updateSettingsActionState();
+        return;
+    }
+
+    if (areFieldsRemovedForPersonas(personaIds)) {
+        notify('info', 'All Persona Dynamic Fields are already removed from the current persona.');
+        updateSettingsActionState();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Remove all Persona Dynamic Fields from the current persona?\n\n' +
+        'This keeps the current persona’s Persona Dynamic Fields toggle as it is.',
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    for (const personaId of personaIds) {
+        const nextState = createEmptyPersonaFieldsState(personaId);
+
+        cachePersonaState(personaId, nextState);
+        await savePersonaStateNow(personaId, nextState);
+    }
+
+    personaStateCache.clear();
+
+    renderPersonaPanel();
+    applyPersonaUiVisibility();
+    updatePersonaTokenEstimate();
+    updateSettingsActionState();
+
+    notify('success', 'Removed all Persona Dynamic Fields from the current persona.');
+}
+
+async function resetAllPersonasToOutOfBox() {
+    const personaIds = getAllPersonaIds();
+
+    if (!personaIds.length) {
+        notify('warning', 'No personas were found in Persona Management.');
+        updateSettingsActionState();
+        return;
+    }
+
+    if (arePersonasOutOfBox(personaIds)) {
+        notify('info', 'Aspect: Evolutia is already reset for every persona.');
+        updateSettingsActionState();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Reset Aspect: Evolutia extension state for all personas?\n\n' +
+        'This will turn Persona Dynamic Fields off and restore the default Background, Personality, and Appearance fields for every persona.',
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    for (const personaId of personaIds) {
+        const outOfBoxState = createOutOfBoxPersonaState();
+
+        cachePersonaState(personaId, outOfBoxState);
+        await savePersonaStateNow(personaId, outOfBoxState);
+    }
+
+    personaStateCache.clear();
+
+    await syncPromptManagerForPersonaState(createOutOfBoxPersonaState());
+
+    renderPersonaPanel();
+    applyPersonaUiVisibility();
+    updatePersonaTokenEstimate();
+    updateSettingsActionState();
+
+    notify('success', `Reset Aspect: Evolutia extension state for ${personaIds.length} persona(s).`);
+}
+
+// -----------------------------------------------------------------------------
+// Extensions Drawer Settings - Rendering Helpers
 // -----------------------------------------------------------------------------
 
 function renderSettingsFooter() {
@@ -2682,7 +4293,11 @@ function setSettingsButtonState(buttonId, { text, disabled, title }) {
         .attr('title', title || '');
 }
 
-function updateSettingsActionState() {
+// -----------------------------------------------------------------------------
+// Extensions Drawer Settings - Action State
+// -----------------------------------------------------------------------------
+
+function updateCharacterSettingsActionState() {
     const allCharacterIds = getAllCharacterIds();
     const currentCharacterIds = getCurrentChatCharacterIds();
 
@@ -2694,16 +4309,16 @@ function updateSettingsActionState() {
     const noCurrentCharacters = currentCharacterIds.length === 0;
     const isGroup = isCurrentGroupChatOpen();
 
-    setSettingsButtonState(UI.SETTINGS_REMOVE_FIELDS_ID, {
+    setSettingsButtonState(UI.SETTINGS_CHARACTER_REMOVE_FIELDS_ID, {
         disabled: noAllCharacters || allFieldsRemoved,
         title: noAllCharacters
-            ? 'No character cards were found in Character Management.'
+            ? 'No characters were found in Character Management.'
             : allFieldsRemoved
-                ? 'All Dynamic Fields are already removed from every character card in Character Management.'
-                : 'Remove all Dynamic Fields from every character card in Character Management. This keeps each character’s Dynamic Fields toggle as it is.',
+                ? 'All Character Dynamic Fields are already removed from every character in Character Management.'
+                : 'Remove all Character Dynamic Fields from every character in Character Management. This keeps each character’s Character Dynamic Fields toggle as it is.',
     });
 
-    setSettingsButtonState(UI.SETTINGS_REMOVE_CURRENT_FIELDS_ID, {
+    setSettingsButtonState(UI.SETTINGS_CHARACTER_REMOVE_CURRENT_FIELDS_ID, {
         text: getCurrentCharactersButtonLabel(),
         disabled: noCurrentCharacters || currentFieldsRemoved,
         title: noCurrentCharacters
@@ -2711,25 +4326,76 @@ function updateSettingsActionState() {
             : currentFieldsRemoved
                 ? (
                     isGroup
-                        ? 'All Dynamic Fields are already removed from the current characters.'
-                        : 'All Dynamic Fields are already removed from the current character.'
+                        ? 'All Character Dynamic Fields are already removed from the current characters.'
+                        : 'All Character Dynamic Fields are already removed from the current character.'
                 )
                 : (
                     isGroup
-                        ? 'Remove all Dynamic Fields from every character in the currently open group chat. This keeps each character’s Dynamic Fields toggle as they are.'
-                        : 'Remove all Dynamic Fields from the character in the currently open chat. This keeps the character’s Dynamic Fields toggle as it is.'
+                        ? 'Remove all Character Dynamic Fields from every character in the currently open group chat. This keeps each character’s Character Dynamic Fields toggle as they are.'
+                        : 'Remove all Character Dynamic Fields from the character in the currently open chat. This keeps the character’s Character Dynamic Fields toggle as it is.'
                 ),
     });
 
-    setSettingsButtonState(UI.SETTINGS_RESET_EXTENSION_ID, {
+    setSettingsButtonState(UI.SETTINGS_CHARACTER_RESET_EXTENSION_ID, {
+        text: 'Reset Extension (Characters)',
         disabled: noAllCharacters || allOutOfBox,
         title: noAllCharacters
-            ? 'No character cards were found in Character Management.'
+            ? 'No characters were found in Character Management.'
             : allOutOfBox
-                ? 'Aspect: Evolutia is already reset for every character card in Character Management.'
-                : 'Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored.',
+                ? 'Aspect: Evolutia is already reset for every character in Character Management.'
+                : 'Reset Aspect: Evolutia extension state for every character in Character Management. Character Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored.',
     });
 }
+
+function updatePersonaSettingsActionState() {
+    const allPersonaIds = getAllPersonaIds();
+    const currentPersonaIds = getCurrentPersonaIds();
+
+    const allFieldsRemoved = areFieldsRemovedForPersonas(allPersonaIds);
+    const currentFieldsRemoved = areFieldsRemovedForPersonas(currentPersonaIds);
+    const allOutOfBox = arePersonasOutOfBox(allPersonaIds);
+
+    const noAllPersonas = allPersonaIds.length === 0;
+    const noCurrentPersona = currentPersonaIds.length === 0;
+
+    setSettingsButtonState(UI.SETTINGS_PERSONA_REMOVE_FIELDS_ID, {
+        disabled: noAllPersonas || allFieldsRemoved,
+        title: noAllPersonas
+            ? 'No personas were found in Persona Management.'
+            : allFieldsRemoved
+                ? 'All Persona Dynamic Fields are already removed from every persona.'
+                : 'Remove all Persona Dynamic Fields from every persona. This keeps each persona’s Persona Dynamic Fields toggle as it is.',
+    });
+
+    setSettingsButtonState(UI.SETTINGS_PERSONA_REMOVE_CURRENT_FIELDS_ID, {
+        text: getCurrentPersonaButtonLabel(),
+        disabled: noCurrentPersona || currentFieldsRemoved,
+        title: noCurrentPersona
+            ? 'Select a persona to use this option.'
+            : currentFieldsRemoved
+                ? 'All Persona Dynamic Fields are already removed from the current persona.'
+                : 'Remove all Persona Dynamic Fields from the current persona. This keeps the current persona’s Persona Dynamic Fields toggle as it is.',
+    });
+
+    setSettingsButtonState(UI.SETTINGS_PERSONA_RESET_EXTENSION_ID, {
+        text: 'Reset Extension (Personas)',
+        disabled: noAllPersonas || allOutOfBox,
+        title: noAllPersonas
+            ? 'No personas were found in Persona Management.'
+            : allOutOfBox
+                ? 'Aspect: Evolutia is already reset for every persona.'
+                : 'Reset Aspect: Evolutia extension state for every persona. Persona Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored.',
+    });
+}
+
+function updateSettingsActionState() {
+    updateCharacterSettingsActionState();
+    updatePersonaSettingsActionState();
+}
+
+// -----------------------------------------------------------------------------
+// Extensions Drawer Settings - Mount
+// -----------------------------------------------------------------------------
 
 function mountExtensionSettings() {
     const $target = $('#extensions_settings2');
@@ -2754,35 +4420,87 @@ function mountExtensionSettings() {
                 </div>
 
                 <div class="inline-drawer-content">
-                    <div class="dsf-settings-box">
-                        <div class="dsf-settings-actions">
-                            <button
-                                id="${UI.SETTINGS_REMOVE_FIELDS_ID}"
-                                type="button"
-                                class="menu_button danger_button"
-                                title="Remove all Dynamic Fields from every character card in Character Management. This keeps each character's Dynamic Fields toggle as it is."
-                            >
-                                Remove All Fields for All Characters
-                            </button>
+					<div class="dsf-settings-box">
+						<div class="dsf-settings-tagline">The Aspect of Evolution</div>
 
-                            <button
-                                id="${UI.SETTINGS_REMOVE_CURRENT_FIELDS_ID}"
-                                type="button"
-                                class="menu_button danger_button"
-                                title="Open a character or group chat to use this option."
-                                disabled
-                            >
-                                Remove All Fields for Current Character
-                            </button>
+						<div
+							id="${UI.SETTINGS_CHARACTER_BOX_ID}"
+                            class="dsf-settings-scope-box dsf-settings-character-box"
+                        >
+                            <div class="dsf-settings-scope-title">Character Dynamic Fields</div>
+                            <div class="dsf-settings-scope-description">
+                                Manage Dynamic Fields that replace character Description injection.
+                            </div>
 
-                            <button
-                                id="${UI.SETTINGS_RESET_EXTENSION_ID}"
-                                type="button"
-                                class="menu_button danger_button"
-                                title="Reset Aspect: Evolutia for every character card in Character Management. Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored."
-                            >
-                                Reset Extension
-                            </button>
+                            <div class="dsf-settings-actions">
+                                <button
+                                    id="${UI.SETTINGS_CHARACTER_REMOVE_FIELDS_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Remove all Character Dynamic Fields from every character in Character Management. This keeps each character's Character Dynamic Fields toggle as it is."
+                                >
+                                    Remove All Fields for All Characters
+                                </button>
+
+                                <button
+                                    id="${UI.SETTINGS_CHARACTER_REMOVE_CURRENT_FIELDS_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Open a character or group chat to use this option."
+                                    disabled
+                                >
+                                    Remove All Fields for Current Character
+                                </button>
+
+                                <button
+                                    id="${UI.SETTINGS_CHARACTER_RESET_EXTENSION_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Reset Aspect: Evolutia extension state for every character in Character Management. Character Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored."
+                                >
+                                    Reset Extension (Characters)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div
+                            id="${UI.SETTINGS_PERSONA_BOX_ID}"
+                            class="dsf-settings-scope-box dsf-settings-persona-box"
+                        >
+                            <div class="dsf-settings-scope-title">Persona Dynamic Fields</div>
+                            <div class="dsf-settings-scope-description">
+                                Manage Dynamic Fields that replace Persona Description injection through Prompt Manager.
+                            </div>
+
+                            <div class="dsf-settings-actions">
+                                <button
+                                    id="${UI.SETTINGS_PERSONA_REMOVE_FIELDS_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Remove all Persona Dynamic Fields from every persona. This keeps each persona's Persona Dynamic Fields toggle as it is."
+                                >
+                                    Remove All Fields for All Personas
+                                </button>
+
+                                <button
+                                    id="${UI.SETTINGS_PERSONA_REMOVE_CURRENT_FIELDS_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Select a persona to use this option."
+                                    disabled
+                                >
+                                    Remove All Fields for Current Persona
+                                </button>
+
+                                <button
+                                    id="${UI.SETTINGS_PERSONA_RESET_EXTENSION_ID}"
+                                    type="button"
+                                    class="menu_button danger_button"
+                                    title="Reset Aspect: Evolutia extension state for every persona. Persona Dynamic Fields will be turned off, and the default Background, Personality, and Appearance fields will be restored."
+                                >
+                                    Reset Extension (Personas)
+                                </button>
+                            </div>
                         </div>
 
                         <div class="dsf-settings-footer">
@@ -2808,16 +4526,28 @@ function mountExtensionSettings() {
 
 function bindExtensionSettingsEvents() {
     $(document)
-        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_REMOVE_FIELDS_ID}`)
-        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_REMOVE_FIELDS_ID}`, removeAllFieldsForAllCharacters);
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_REMOVE_FIELDS_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_REMOVE_FIELDS_ID}`, removeAllFieldsForAllCharacters);
 
     $(document)
-        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_REMOVE_CURRENT_FIELDS_ID}`)
-        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_REMOVE_CURRENT_FIELDS_ID}`, removeAllFieldsForCurrentChatCharacters);
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_REMOVE_CURRENT_FIELDS_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_REMOVE_CURRENT_FIELDS_ID}`, removeAllFieldsForCurrentChatCharacters);
 
     $(document)
-        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_RESET_EXTENSION_ID}`)
-        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_RESET_EXTENSION_ID}`, resetAllCharactersToOutOfBox);
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_RESET_EXTENSION_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_CHARACTER_RESET_EXTENSION_ID}`, resetAllCharactersToOutOfBox);
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_REMOVE_FIELDS_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_REMOVE_FIELDS_ID}`, removeAllFieldsForAllPersonas);
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_REMOVE_CURRENT_FIELDS_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_REMOVE_CURRENT_FIELDS_ID}`, removeAllFieldsForCurrentPersona);
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_RESET_EXTENSION_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.SETTINGS_PERSONA_RESET_EXTENSION_ID}`, resetAllPersonasToOutOfBox);
 }
 
 // ============================================================================
@@ -2825,11 +4555,10 @@ function bindExtensionSettingsEvents() {
 // ============================================================================
 // Purpose:
 // - Own CSS, DOM mounting, field-list rendering, and visibility rules.
-// - Event handlers may call this after state changes.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// User Interface Rendering - Description Textarea Lookup
+// User Interface Rendering - Character Description Textarea Lookup
 // -----------------------------------------------------------------------------
 
 function getDescriptionTextarea() {
@@ -2837,7 +4566,73 @@ function getDescriptionTextarea() {
 }
 
 // -----------------------------------------------------------------------------
-// User Interface Rendering - Standard Token Counter Lookup
+// User Interface Rendering - Persona Description Textarea Lookup
+// -----------------------------------------------------------------------------
+
+function getPersonaDescriptionTextarea() {
+    const directSelectors = [
+        '#persona_description_textarea',
+        '#persona_description',
+        'textarea[name="persona_description"]',
+        'textarea[name="personaDescription"]',
+        'textarea[data-name="persona_description"]',
+        'textarea[data-name="personaDescription"]',
+        'textarea[data-testid="persona-description"]',
+    ];
+
+    for (const selector of directSelectors) {
+        const $match = $(selector).filter('textarea').first();
+
+        if ($match.length) {
+            return $match;
+        }
+    }
+
+    const containerSelectors = [
+        '#persona_description',
+        '#persona_description_block',
+        '#persona_description_container',
+        '#persona_description_holder',
+        '.persona_description',
+        '.persona-description',
+        '[data-testid="persona-description-container"]',
+    ];
+
+    for (const selector of containerSelectors) {
+        const $textarea = $(selector).find('textarea').first();
+
+        if ($textarea.length) {
+            return $textarea;
+        }
+    }
+
+    const $root = getPersonaEditorRootFromDocument();
+
+    if ($root.length) {
+        const $textarea = $root
+            .find('textarea')
+            .filter(function findPersonaDescriptionTextareaByContext() {
+                const id = String(this.id || '').toLowerCase();
+                const name = String(this.getAttribute('name') || '').toLowerCase();
+                const dataName = String(this.getAttribute('data-name') || '').toLowerCase();
+                const ariaLabel = String(this.getAttribute('aria-label') || '').toLowerCase();
+                const placeholder = String(this.getAttribute('placeholder') || '').toLowerCase();
+                const joined = `${id} ${name} ${dataName} ${ariaLabel} ${placeholder}`;
+
+                return joined.includes('persona') && joined.includes('description');
+            })
+            .first();
+
+        if ($textarea.length) {
+            return $textarea;
+        }
+    }
+
+    return $();
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Character Editor Root and Token Counter Lookup
 // -----------------------------------------------------------------------------
 
 function getCharacterEditorRoot() {
@@ -2859,12 +4654,14 @@ function getStandardCharacterTokenCounters() {
     const $selectorMatches = $root
         .find(STANDARD_TOKEN_COUNTER_SELECTORS.join(','))
         .not(`#${UI.BAR_ID}`)
-        .not(`#${UI.BAR_ID} *`);
+        .not(`#${UI.BAR_ID} *`)
+        .not(`#${UI.PERSONA_BAR_ID}`)
+        .not(`#${UI.PERSONA_BAR_ID} *`);
 
     const $textMatches = $root
         .find('div, span, small, label')
         .filter(function filterTokenCounterText() {
-            if ($(this).closest(`#${UI.BAR_ID}`).length) {
+            if ($(this).closest(`#${UI.BAR_ID}, #${UI.PERSONA_BAR_ID}`).length) {
                 return false;
             }
 
@@ -2904,6 +4701,136 @@ function setStandardTokenCounterHidden(hidden) {
 }
 
 // -----------------------------------------------------------------------------
+// User Interface Rendering - Persona Editor Root and Token Counter Lookup
+// -----------------------------------------------------------------------------
+
+function getPersonaEditorRootFromDocument() {
+    const rootSelectors = [
+        '#persona_management',
+        '#persona-management',
+        '#persona_settings',
+        '#persona-settings',
+        '#persona_panel',
+        '#persona-panel',
+        '#persona_container',
+        '#persona-container',
+        '#user_avatar_block',
+        '#user-settings-block',
+        '.persona_management',
+        '.persona-management',
+        '.persona_settings',
+        '.persona-settings',
+        '.persona_editor',
+        '.persona-editor',
+    ];
+
+    for (const selector of rootSelectors) {
+        const $root = $(selector).first();
+
+        if ($root.length) {
+            return $root;
+        }
+    }
+
+    return $();
+}
+
+function getPersonaEditorRoot() {
+    const $description = getPersonaDescriptionTextarea();
+    const $root = $description
+        .closest(
+            [
+                '#persona_management',
+                '#persona-management',
+                '#persona_settings',
+                '#persona-settings',
+                '#persona_panel',
+                '#persona-panel',
+                '#persona_container',
+                '#persona-container',
+                '#user_avatar_block',
+                '#user-settings-block',
+                '.persona_management',
+                '.persona-management',
+                '.persona_settings',
+                '.persona-settings',
+                '.persona_editor',
+                '.persona-editor',
+                '.inline-drawer-content',
+            ].join(', '),
+        )
+        .first();
+
+    if ($root.length) {
+        return $root;
+    }
+
+    const $documentRoot = getPersonaEditorRootFromDocument();
+
+    return $documentRoot.length ? $documentRoot : $description.parent();
+}
+
+function getPersonaDescriptionTokenCounters() {
+    const $root = getPersonaEditorRoot();
+
+    if (!$root.length) {
+        return $();
+    }
+
+    const $selectorMatches = $root
+        .find(PERSONA_TOKEN_COUNTER_SELECTORS.join(','))
+        .not(`#${UI.PERSONA_BAR_ID}`)
+        .not(`#${UI.PERSONA_BAR_ID} *`)
+        .not(`#${UI.BAR_ID}`)
+        .not(`#${UI.BAR_ID} *`);
+
+    const $textMatches = $root
+        .find('div, span, small, label')
+        .filter(function filterPersonaTokenCounterText() {
+            if ($(this).closest(`#${UI.PERSONA_BAR_ID}, #${UI.BAR_ID}`).length) {
+                return false;
+            }
+
+            const id = String(this.id || '').toLowerCase();
+            const className = typeof this.className === 'string'
+                ? this.className
+                : String(this.className?.baseVal || '');
+            const idClass = `${id} ${className}`.toLowerCase();
+            const text = String($(this).text() || '').trim().toLowerCase();
+
+            return (
+                idClass.includes('persona') &&
+                idClass.includes('token') &&
+                /token/.test(text)
+            );
+        });
+
+    return $selectorMatches.add($textMatches);
+}
+
+function setPersonaTokenCounterHidden(hidden) {
+    getPersonaDescriptionTokenCounters().each(function togglePersonaTokenCounter() {
+        const $element = $(this);
+
+        if (hidden) {
+            if (!$element.attr('data-dsf-persona-original-display')) {
+                $element.attr('data-dsf-persona-original-display', $element.css('display') || '');
+            }
+
+            $element.css('display', 'none');
+            return;
+        }
+
+        const originalDisplay = $element.attr('data-dsf-persona-original-display');
+
+        if (originalDisplay !== undefined) {
+            $element.css('display', originalDisplay === 'none' ? '' : originalDisplay);
+            $element.removeAttr('data-dsf-persona-original-display');
+        }
+    });
+}
+
+// -----------------------------------------------------------------------------
 // User Interface Rendering - Styles
 // -----------------------------------------------------------------------------
 
@@ -2915,10 +4842,18 @@ function ensureStyles() {
     const style = document.createElement('style');
     style.id = UI.STYLE_ID;
     style.textContent = `
-        #${UI.BAR_ID} {
+        #${UI.BAR_ID},
+        #${UI.PERSONA_BAR_ID} {
             display: flex;
             flex-direction: column;
             gap: 8px;
+            width: 100%;
+            max-width: none;
+            min-width: 0;
+            flex: 1 1 100%;
+            align-self: stretch;
+            grid-column: 1 / -1;
+            box-sizing: border-box;
             margin: 6px 0;
             padding: 8px;
             border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
@@ -2926,24 +4861,41 @@ function ensureStyles() {
             background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.10));
         }
 
-        #${UI.BAR_ID} .dsf-top-controls {
+        #${UI.PERSONA_BAR_ID} {
+            clear: both;
+        }
+
+        #${UI.BAR_ID} *,
+        #${UI.PERSONA_BAR_ID} * {
+            box-sizing: border-box;
+        }
+
+        #${UI.BAR_ID} .dsf-top-controls,
+        #${UI.PERSONA_BAR_ID} .dsf-top-controls {
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-wrap: wrap;
             gap: 8px;
+            width: 100%;
+            min-width: 0;
         }
 
         #${UI.BAR_ID} .dsf-left-controls,
         #${UI.BAR_ID} .dsf-right-controls,
-        #${UI.BAR_ID} .dsf-bottom-controls {
+        #${UI.BAR_ID} .dsf-bottom-controls,
+        #${UI.PERSONA_BAR_ID} .dsf-left-controls,
+        #${UI.PERSONA_BAR_ID} .dsf-right-controls,
+        #${UI.PERSONA_BAR_ID} .dsf-bottom-controls {
             display: inline-flex;
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
+            min-width: 0;
         }
 
-        #${UI.BAR_ID} .dsf-right-controls {
+        #${UI.BAR_ID} .dsf-right-controls,
+        #${UI.PERSONA_BAR_ID} .dsf-right-controls {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -2951,30 +4903,36 @@ function ensureStyles() {
             margin-left: auto;
         }
 
-        #${UI.BAR_ID} .dsf-top-action-row {
+        #${UI.BAR_ID} .dsf-top-action-row,
+        #${UI.PERSONA_BAR_ID} .dsf-top-action-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 8px;
             width: 100%;
+            min-width: 0;
         }
 
-        #${UI.DELETE_ALL_TOP_ID} {
+        #${UI.DELETE_ALL_TOP_ID},
+        #${UI.PERSONA_DELETE_ALL_TOP_ID} {
             margin-right: auto;
         }
 
-        #${UI.ADD_TOP_ID} {
+        #${UI.ADD_TOP_ID},
+        #${UI.PERSONA_ADD_TOP_ID} {
             margin-left: auto;
         }
 
-        #${UI.BAR_ID} label {
+        #${UI.BAR_ID} label,
+        #${UI.PERSONA_BAR_ID} label {
             display: inline-flex;
             align-items: center;
             gap: 6px;
             margin: 0;
         }
-		
-		#${UI.BAR_ID} .dsf-dynamic-toggle-label {
+
+        #${UI.BAR_ID} .dsf-dynamic-toggle-label,
+        #${UI.PERSONA_BAR_ID} .dsf-dynamic-toggle-label {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -2990,24 +4948,28 @@ function ensureStyles() {
             box-sizing: border-box;
         }
 
-        #${UI.BAR_ID} .dsf-dynamic-toggle-label input {
+        #${UI.BAR_ID} .dsf-dynamic-toggle-label input,
+        #${UI.PERSONA_BAR_ID} .dsf-dynamic-toggle-label input {
             margin: 0;
             flex: 0 0 auto;
         }
 
-        #${UI.BAR_ID} .dsf-dynamic-toggle-label span {
+        #${UI.BAR_ID} .dsf-dynamic-toggle-label span,
+        #${UI.PERSONA_BAR_ID} .dsf-dynamic-toggle-label span {
             display: inline-flex;
             align-items: center;
             line-height: 1;
         }
 
-        #${UI.BOTTOM_ACTIONS_ID} {
+        #${UI.BOTTOM_ACTIONS_ID},
+        #${UI.PERSONA_BOTTOM_ACTIONS_ID} {
             display: none;
             align-items: center;
             justify-content: flex-start;
             flex-wrap: wrap;
             gap: 8px;
             width: 100%;
+            min-width: 0;
             margin-top: 4px;
         }
 
@@ -3015,7 +4977,12 @@ function ensureStyles() {
         #${UI.ADD_TOP_ID},
         #${UI.ADD_BOTTOM_ID},
         #${UI.IMPORT_ID},
-        #${UI.EXPORT_ID} {
+        #${UI.EXPORT_ID},
+        #${UI.PERSONA_DELETE_ALL_TOP_ID},
+        #${UI.PERSONA_ADD_TOP_ID},
+        #${UI.PERSONA_ADD_BOTTOM_ID},
+        #${UI.PERSONA_IMPORT_ID},
+        #${UI.PERSONA_EXPORT_ID} {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -3025,21 +4992,40 @@ function ensureStyles() {
             flex: 0 0 auto;
         }
 
-        #${UI.DELETE_ALL_TOP_ID}:disabled {
+        #${UI.DELETE_ALL_TOP_ID}:disabled,
+        #${UI.PERSONA_DELETE_ALL_TOP_ID}:disabled {
             opacity: 0.45;
             cursor: not-allowed;
             filter: grayscale(0.35);
         }
 
-        #${UI.ADD_BOTTOM_ID} {
+        #${UI.ADD_BOTTOM_ID},
+        #${UI.PERSONA_ADD_BOTTOM_ID} {
             margin-left: auto;
         }
 
-        #${UI.PANEL_ID} {
+        #${UI.PANEL_ID},
+        #${UI.PERSONA_PANEL_ID} {
             display: none;
+            width: 100%;
+            max-width: none;
+            min-width: 0;
+            flex: 1 1 100%;
+            align-self: stretch;
         }
 
-        #${UI.PANEL_ID} .dsf-field {
+        #${UI.PANEL_ID} .dsf-fields,
+        #${UI.PERSONA_PANEL_ID} .dsf-fields {
+            width: 100%;
+            max-width: none;
+            min-width: 0;
+        }
+
+        #${UI.PANEL_ID} .dsf-field,
+        #${UI.PERSONA_PANEL_ID} .dsf-field {
+            width: 100%;
+            max-width: none;
+            min-width: 0;
             padding: 8px;
             margin: 8px 0;
             border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12));
@@ -3047,20 +5033,24 @@ function ensureStyles() {
             background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));
         }
 
-        #${UI.PANEL_ID} .dsf-field.dsf-dragging {
+        #${UI.PANEL_ID} .dsf-field.dsf-dragging,
+        #${UI.PERSONA_PANEL_ID} .dsf-field.dsf-dragging {
             opacity: 0.55;
             outline: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,0.35));
         }
 
-        #${UI.PANEL_ID} .dsf-field:first-child {
+        #${UI.PANEL_ID} .dsf-field:first-child,
+        #${UI.PERSONA_PANEL_ID} .dsf-field:first-child {
             margin-top: 0;
         }
 
-        #${UI.PANEL_ID} .dsf-field:last-child {
+        #${UI.PANEL_ID} .dsf-field:last-child,
+        #${UI.PERSONA_PANEL_ID} .dsf-field:last-child {
             margin-bottom: 0;
         }
 
-        #${UI.PANEL_ID} .dsf-field-top-row {
+        #${UI.PANEL_ID} .dsf-field-top-row,
+        #${UI.PERSONA_PANEL_ID} .dsf-field-top-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -3068,9 +5058,11 @@ function ensureStyles() {
             gap: 8px;
             margin-bottom: 6px;
             width: 100%;
+            min-width: 0;
         }
 
-        #${UI.PANEL_ID} .dsf-field-order-wrap {
+        #${UI.PANEL_ID} .dsf-field-order-wrap,
+        #${UI.PERSONA_PANEL_ID} .dsf-field-order-wrap {
             display: inline-flex;
             align-items: center;
             justify-content: space-between;
@@ -3080,7 +5072,8 @@ function ensureStyles() {
             font-size: 0.9em;
         }
 
-        #${UI.PANEL_ID} .dsf-position-control {
+        #${UI.PANEL_ID} .dsf-position-control,
+        #${UI.PERSONA_PANEL_ID} .dsf-position-control {
             display: inline-flex;
             align-items: center;
             justify-content: flex-end;
@@ -3088,7 +5081,8 @@ function ensureStyles() {
             margin-left: auto;
         }
 
-        #${UI.PANEL_ID} .dsf-field-order {
+        #${UI.PANEL_ID} .dsf-field-order,
+        #${UI.PERSONA_PANEL_ID} .dsf-field-order {
             width: auto;
             min-width: 2ch;
             max-width: 10ch;
@@ -3098,7 +5092,8 @@ function ensureStyles() {
             padding-right: 4px;
         }
 
-        #${UI.PANEL_ID} .dsf-drag-handle {
+        #${UI.PANEL_ID} .dsf-drag-handle,
+        #${UI.PERSONA_PANEL_ID} .dsf-drag-handle {
             cursor: grab;
             width: auto;
             min-width: max-content;
@@ -3109,17 +5104,20 @@ function ensureStyles() {
             margin-right: auto;
         }
 
-        #${UI.PANEL_ID} .dsf-drag-handle:active {
+        #${UI.PANEL_ID} .dsf-drag-handle:active,
+        #${UI.PERSONA_PANEL_ID} .dsf-drag-handle:active {
             cursor: grabbing;
         }
 
-        #${UI.PANEL_ID} .dsf-label {
+        #${UI.PANEL_ID} .dsf-label,
+        #${UI.PERSONA_PANEL_ID} .dsf-label {
             font-size: 0.85em;
             opacity: 0.85;
             margin: 6px 0 2px;
         }
 
-        #${UI.PANEL_ID} .dsf-trigger-mode-row {
+        #${UI.PANEL_ID} .dsf-trigger-mode-row,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-mode-row {
             display: flex;
             align-items: center;
             justify-content: flex-end;
@@ -3128,7 +5126,8 @@ function ensureStyles() {
             margin-bottom: 8px;
         }
 
-        #${UI.PANEL_ID} .dsf-keyword-mode-wrap {
+        #${UI.PANEL_ID} .dsf-keyword-mode-wrap,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-mode-wrap {
             display: inline-flex;
             align-items: center;
             justify-content: flex-end;
@@ -3140,12 +5139,16 @@ function ensureStyles() {
 
         #${UI.PANEL_ID} .dsf-activating-keyword-mode,
         #${UI.PANEL_ID} .dsf-enabling-keyword-mode,
-        #${UI.PANEL_ID} .dsf-disabling-keyword-mode {
+        #${UI.PANEL_ID} .dsf-disabling-keyword-mode,
+        #${UI.PERSONA_PANEL_ID} .dsf-activating-keyword-mode,
+        #${UI.PERSONA_PANEL_ID} .dsf-enabling-keyword-mode,
+        #${UI.PERSONA_PANEL_ID} .dsf-disabling-keyword-mode {
             width: auto;
             min-width: 5.5em;
         }
 
-        #${UI.PANEL_ID} .dsf-trigger-menu-stack {
+        #${UI.PANEL_ID} .dsf-trigger-menu-stack,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-menu-stack {
             display: flex;
             flex-direction: row;
             align-items: center;
@@ -3154,9 +5157,11 @@ function ensureStyles() {
             gap: 8px;
             margin-top: 6px;
             width: 100%;
+            min-width: 0;
         }
 
-        #${UI.PANEL_ID} .dsf-trigger-control-row {
+        #${UI.PANEL_ID} .dsf-trigger-control-row,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-control-row {
             display: inline-flex;
             align-items: center;
             justify-content: flex-start;
@@ -3166,7 +5171,9 @@ function ensureStyles() {
 
         #${UI.PANEL_ID} .dsf-keyword-triggers-wrap,
         #${UI.PANEL_ID} .dsf-trigger-actions-wrap,
-        #${UI.PANEL_ID} .dsf-triggered-by-wrap {
+        #${UI.PANEL_ID} .dsf-triggered-by-wrap,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-triggers-wrap,
+        #${UI.PERSONA_PANEL_ID} .dsf-triggered-by-wrap {
             position: relative;
             display: inline-flex;
             align-items: center;
@@ -3175,7 +5182,9 @@ function ensureStyles() {
 
         #${UI.PANEL_ID} .dsf-keyword-triggers-button,
         #${UI.PANEL_ID} .dsf-trigger-actions-button,
-        #${UI.PANEL_ID} .dsf-triggered-by-button {
+        #${UI.PANEL_ID} .dsf-triggered-by-button,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-triggers-button,
+        #${UI.PERSONA_PANEL_ID} .dsf-triggered-by-button {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -3187,7 +5196,9 @@ function ensureStyles() {
 
         #${UI.PANEL_ID} .dsf-keyword-triggers-menu,
         #${UI.PANEL_ID} .dsf-trigger-actions-menu,
-        #${UI.PANEL_ID} .dsf-triggered-by-menu {
+        #${UI.PANEL_ID} .dsf-triggered-by-menu,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-triggers-menu,
+        #${UI.PERSONA_PANEL_ID} .dsf-triggered-by-menu {
             display: none;
             position: absolute;
             left: 0;
@@ -3204,27 +5215,28 @@ function ensureStyles() {
         }
 
         #${UI.PANEL_ID} .dsf-keyword-triggers-menu,
-        #${UI.PANEL_ID} .dsf-trigger-actions-menu {
+        #${UI.PANEL_ID} .dsf-trigger-actions-menu,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-triggers-menu {
             width: min(520px, calc(100vw - 16px));
         }
 
         #${UI.PANEL_ID} .dsf-keyword-triggers-menu.dsf-menu-open,
         #${UI.PANEL_ID} .dsf-trigger-actions-menu.dsf-menu-open,
-        #${UI.PANEL_ID} .dsf-triggered-by-menu.dsf-menu-open {
+        #${UI.PANEL_ID} .dsf-triggered-by-menu.dsf-menu-open,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-triggers-menu.dsf-menu-open,
+        #${UI.PERSONA_PANEL_ID} .dsf-triggered-by-menu.dsf-menu-open {
             position: fixed;
             left: var(--dsf-menu-left, 8px);
             top: var(--dsf-menu-top, 8px);
-        }
-
-        #${UI.PANEL_ID} .dsf-keyword-triggers-menu.dsf-menu-open,
-        #${UI.PANEL_ID} .dsf-trigger-actions-menu.dsf-menu-open,
-        #${UI.PANEL_ID} .dsf-triggered-by-menu.dsf-menu-open {
             display: flex;
             flex-direction: column;
             gap: 6px;
+            max-height: calc(100vh - 16px);
+            overflow: auto;
         }
 
-        #${UI.PANEL_ID} .dsf-trigger-source-option {
+        #${UI.PANEL_ID} .dsf-trigger-source-option,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-source-option {
             display: flex;
             align-items: center;
             justify-content: flex-start;
@@ -3234,33 +5246,40 @@ function ensureStyles() {
             white-space: nowrap;
         }
 
-        #${UI.PANEL_ID} .dsf-trigger-source-option input {
+        #${UI.PANEL_ID} .dsf-trigger-source-option input,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-source-option input {
             width: auto;
             min-width: unset;
         }
 
         #${UI.PANEL_ID} .dsf-trigger-textarea,
-        #${UI.PANEL_ID} .dsf-trigger-action-instruction {
+        #${UI.PANEL_ID} .dsf-trigger-action-instruction,
+        #${UI.PERSONA_PANEL_ID} .dsf-trigger-textarea {
             min-height: 44px;
             resize: vertical;
         }
 
-        #${UI.PANEL_ID} .dsf-keyword-trigger-group {
+        #${UI.PANEL_ID} .dsf-keyword-trigger-group,
+        #${UI.PERSONA_PANEL_ID} .dsf-keyword-trigger-group {
             display: flex;
             flex-direction: column;
             width: 100%;
         }
 
-        #${UI.PANEL_ID} .dsf-bottom-row {
+        #${UI.PANEL_ID} .dsf-bottom-row,
+        #${UI.PERSONA_PANEL_ID} .dsf-bottom-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-wrap: wrap;
             gap: 8px;
             margin-top: 8px;
+            width: 100%;
+            min-width: 0;
         }
 
-        #${UI.PANEL_ID} .dsf-field-actions {
+        #${UI.PANEL_ID} .dsf-field-actions,
+        #${UI.PERSONA_PANEL_ID} .dsf-field-actions {
             display: flex;
             align-items: center;
             justify-content: flex-end;
@@ -3269,19 +5288,22 @@ function ensureStyles() {
             margin-left: auto;
         }
 
-        #${UI.PANEL_ID} .dsf-field-actions button {
+        #${UI.PANEL_ID} .dsf-field-actions button,
+        #${UI.PERSONA_PANEL_ID} .dsf-field-actions button {
             white-space: nowrap;
             width: auto;
             min-width: max-content;
         }
 
-        #${UI.PANEL_ID} .dsf-inject-row {
+        #${UI.PANEL_ID} .dsf-inject-row,
+        #${UI.PERSONA_PANEL_ID} .dsf-inject-row {
             display: flex;
             align-items: center;
             justify-content: flex-start;
         }
 
-        #${UI.PANEL_ID} .dsf-inject-row label {
+        #${UI.PANEL_ID} .dsf-inject-row label,
+        #${UI.PERSONA_PANEL_ID} .dsf-inject-row label {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -3290,30 +5312,39 @@ function ensureStyles() {
 
         #${UI.PANEL_ID} input[type="text"],
         #${UI.PANEL_ID} input[type="number"],
-        #${UI.PANEL_ID} textarea {
+        #${UI.PANEL_ID} textarea,
+        #${UI.PERSONA_PANEL_ID} input[type="text"],
+        #${UI.PERSONA_PANEL_ID} input[type="number"],
+        #${UI.PERSONA_PANEL_ID} textarea {
             width: 100%;
             box-sizing: border-box;
         }
 
         #${UI.PANEL_ID} .dsf-activating-triggers,
         #${UI.PANEL_ID} .dsf-enabling-triggers,
-        #${UI.PANEL_ID} .dsf-disabling-triggers {
+        #${UI.PANEL_ID} .dsf-disabling-triggers,
+        #${UI.PERSONA_PANEL_ID} .dsf-activating-triggers,
+        #${UI.PERSONA_PANEL_ID} .dsf-enabling-triggers,
+        #${UI.PERSONA_PANEL_ID} .dsf-disabling-triggers {
             min-height: 44px;
             resize: vertical;
         }
 
-        #${UI.PANEL_ID} .dsf-content {
+        #${UI.PANEL_ID} .dsf-content,
+        #${UI.PERSONA_PANEL_ID} .dsf-content {
             min-height: 100px;
             resize: vertical;
         }
 
-        #${UI.PANEL_ID} .dsf-empty {
+        #${UI.PANEL_ID} .dsf-empty,
+        #${UI.PERSONA_PANEL_ID} .dsf-empty {
             opacity: 0.75;
             font-style: italic;
             padding: 8px 0;
         }
 
-        #${UI.TOKEN_ROW_ID} {
+        #${UI.TOKEN_ROW_ID},
+        #${UI.PERSONA_TOKEN_ROW_ID} {
             display: none;
             align-items: center;
             justify-content: flex-end;
@@ -3321,7 +5352,8 @@ function ensureStyles() {
             width: 100%;
         }
 
-        #${UI.TOKEN_ID} {
+        #${UI.TOKEN_ID},
+        #${UI.PERSONA_TOKEN_ID} {
             display: inline-flex;
             align-items: center;
             justify-content: flex-end;
@@ -3332,12 +5364,14 @@ function ensureStyles() {
             margin-left: auto;
         }
 
-        #${UI.BAR_ID} .dsf-menu-wrap {
+        #${UI.BAR_ID} .dsf-menu-wrap,
+        #${UI.PERSONA_BAR_ID} .dsf-menu-wrap {
             position: relative;
             display: inline-flex;
         }
 
-        #${UI.BAR_ID} .dsf-menu {
+        #${UI.BAR_ID} .dsf-menu,
+        #${UI.PERSONA_BAR_ID} .dsf-menu {
             display: none;
             position: absolute;
             left: 0;
@@ -3351,23 +5385,54 @@ function ensureStyles() {
             box-shadow: 0 4px 12px rgba(0,0,0,0.35);
         }
 
-        #${UI.BAR_ID} .dsf-menu.dsf-menu-open {
+        #${UI.BAR_ID} .dsf-menu.dsf-menu-open,
+        #${UI.PERSONA_BAR_ID} .dsf-menu.dsf-menu-open {
             display: flex;
             flex-direction: column;
             gap: 4px;
         }
 
-        #${UI.BAR_ID} .dsf-menu button {
+        #${UI.BAR_ID} .dsf-menu button,
+        #${UI.PERSONA_BAR_ID} .dsf-menu button {
             justify-content: flex-start;
             width: 100%;
             white-space: nowrap;
         }
+		
+		#${UI.SETTINGS_ID} .dsf-settings-tagline {
+			font: inherit;
+			font-size: 0.9em;
+			opacity: 0.75;
+			text-align: right;
+			margin: 0 0 8px;
+		}
 
         #${UI.SETTINGS_ID} .dsf-settings-box {
             border: 1px solid #000;
             border-radius: 10px;
             padding: 10px;
             margin: 8px 0;
+        }
+
+        #${UI.SETTINGS_ID} .dsf-settings-scope-box {
+			border: 1px solid rgba(183, 110, 121, 0.65);
+			outline: 1px solid rgba(183, 110, 121, 0.65);
+			outline-offset: 2px;
+			border-radius: 12px;
+			padding: 10px;
+			margin: 10px 0 14px;
+			background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));
+		}
+
+        #${UI.SETTINGS_ID} .dsf-settings-scope-title {
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        #${UI.SETTINGS_ID} .dsf-settings-scope-description {
+            opacity: 0.78;
+            font-size: 0.9em;
+            margin-bottom: 8px;
         }
 
         #${UI.SETTINGS_ID} .dsf-settings-actions {
@@ -3412,7 +5477,7 @@ function ensureStyles() {
 }
 
 // -----------------------------------------------------------------------------
-// User Interface Rendering - Mount
+// User Interface Rendering - Character Mount Helpers
 // -----------------------------------------------------------------------------
 
 function getDescriptionInsertTarget($description) {
@@ -3442,7 +5507,7 @@ function getDescriptionInsertTarget($description) {
                 return String($(this).text() || '').trim() === 'Description';
             })
             .filter(function excludeAspectEvolutiaUi() {
-                return !$(this).closest(`#${UI.BAR_ID}`).length;
+                return !$(this).closest(`#${UI.BAR_ID}, #${UI.PERSONA_BAR_ID}`).length;
             })
             .first();
     }
@@ -3478,6 +5543,179 @@ function getDescriptionInsertTarget($description) {
     return $fieldBlock.length ? $fieldBlock : $description;
 }
 
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Persona Mount Helpers
+// -----------------------------------------------------------------------------
+
+function getElementRenderedWidth(element) {
+    if (!element) {
+        return 0;
+    }
+
+    const rect = element.getBoundingClientRect?.();
+
+    if (rect?.width) {
+        return rect.width;
+    }
+
+    return Number(element.offsetWidth || 0);
+}
+
+function getPersonaDescriptionVisibilityTarget($description) {
+    const descriptionElement = $description?.[0];
+
+    if (!descriptionElement) {
+        return $description;
+    }
+
+    const $root = getPersonaEditorRoot();
+    const id = String($description.attr('id') || '');
+    let $label = $();
+
+    if ($root.length && id) {
+        $label = $root
+            .find('label')
+            .filter(function findLabelForPersonaDescriptionTextarea() {
+                return String(this.getAttribute('for') || '') === id;
+            })
+            .first();
+    }
+
+    if (!$label.length && $root.length) {
+        $label = $root
+            .find('label, div, span, strong')
+            .filter(function findPersonaDescriptionLabelByText() {
+                const text = String($(this).text() || '').trim().toLowerCase();
+
+                return (
+                    text === 'description' ||
+                    text === 'persona description' ||
+                    text === 'persona description / prompt'
+                );
+            })
+            .filter(function excludeAspectEvolutiaUi() {
+                return !$(this).closest(`#${UI.PERSONA_BAR_ID}, #${UI.BAR_ID}`).length;
+            })
+            .first();
+    }
+
+    const labelElement = $label[0];
+
+    if (labelElement) {
+        let node = descriptionElement.parentElement;
+
+        while (node && node !== document.body && node !== document.documentElement) {
+            const $node = $(node);
+
+            if (node.contains(descriptionElement) && node.contains(labelElement)) {
+                if (
+                    !$node.is(
+                        [
+                            '#persona_management',
+                            '#persona-management',
+                            '#persona_settings',
+                            '#persona-settings',
+                            '#persona_panel',
+                            '#persona-panel',
+                            '#persona_container',
+                            '#persona-container',
+                            '#user_avatar_block',
+                            '#user-settings-block',
+                            '.persona_management',
+                            '.persona-management',
+                            '.persona_settings',
+                            '.persona-settings',
+                            '.persona_editor',
+                            '.persona-editor',
+                            '.inline-drawer-content',
+                        ].join(', '),
+                    )
+                ) {
+                    return $node;
+                }
+            }
+
+            if ($root.length && node === $root[0]) {
+                break;
+            }
+
+            node = node.parentElement;
+        }
+    }
+
+    const $fieldBlock = $description
+        .closest('.range-block, .form-group, .marginBot5, .wide100p, .flex-container')
+        .first();
+
+    return $fieldBlock.length ? $fieldBlock : $description;
+}
+
+function getPersonaDescriptionInsertTarget($description) {
+    const $visibilityTarget = getPersonaDescriptionVisibilityTarget($description);
+    const $root = getPersonaEditorRoot();
+
+    if (!$visibilityTarget.length || !$root.length) {
+        return $visibilityTarget.length ? $visibilityTarget : $description;
+    }
+
+    const rootWidth = getElementRenderedWidth($root[0]);
+
+    if (!rootWidth) {
+        return $visibilityTarget;
+    }
+
+    let bestNode = $visibilityTarget[0];
+    let node = bestNode;
+
+    while (node && node.parentElement && node.parentElement !== document.body && node.parentElement !== document.documentElement) {
+        const $node = $(node);
+
+        if (
+            $node.is(
+                [
+                    '#persona_management',
+                    '#persona-management',
+                    '#persona_settings',
+                    '#persona-settings',
+                    '#persona_panel',
+                    '#persona-panel',
+                    '#persona_container',
+                    '#persona-container',
+                    '#user_avatar_block',
+                    '#user-settings-block',
+                    '.persona_management',
+                    '.persona-management',
+                    '.persona_settings',
+                    '.persona-settings',
+                    '.persona_editor',
+                    '.persona-editor',
+                    '.inline-drawer-content',
+                ].join(', '),
+            )
+        ) {
+            break;
+        }
+
+        const width = getElementRenderedWidth(node);
+
+        if (width >= rootWidth * 0.78 || $node.hasClass('wide100p')) {
+            bestNode = node;
+        }
+
+        if ($root.length && node === $root[0]) {
+            break;
+        }
+
+        node = node.parentElement;
+    }
+
+    return $(bestNode);
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Character Mount
+// -----------------------------------------------------------------------------
+
 function mountUi() {
     const $description = getDescriptionTextarea();
 
@@ -3489,10 +5727,10 @@ function mountUi() {
 
     if (!$(`#${UI.BAR_ID}`).length) {
         const $bar = $(`
-            <div id="${UI.BAR_ID}">
+            <div id="${UI.BAR_ID}" data-target-scope="${TARGET_SCOPE.CHARACTER}">
                 <div class="dsf-top-controls">
                     <div class="dsf-left-controls">
-                        <label class="checkbox_label dsf-dynamic-toggle-label" title="When enabled, Description is hidden in the editor, native charDescription is disabled in Prompt Manager, and Aspect: Evolutia's prompt is enabled.">
+                        <label class="checkbox_label dsf-dynamic-toggle-label" title="When enabled, Character Description is hidden in the editor, native charDescription is disabled in Prompt Manager, and Char Description (Evolutia) is enabled.">
                             <input id="${UI.SWAP_ID}" type="checkbox" />
                             <span>Dynamic Fields</span>
                         </label>
@@ -3503,7 +5741,7 @@ function mountUi() {
                             id="${UI.DELETE_ALL_TOP_ID}"
                             type="button"
                             class="menu_button danger_button"
-                            title="Delete all Dynamic Fields for this character."
+                            title="Delete all Character Dynamic Fields for this character."
                         >
                             Delete All
                         </button>
@@ -3512,13 +5750,13 @@ function mountUi() {
                     </div>
                 </div>
 
-                <div id="${UI.PANEL_ID}"></div>
+                <div id="${UI.PANEL_ID}" data-target-scope="${TARGET_SCOPE.CHARACTER}"></div>
 
                 <div id="${UI.BOTTOM_ACTIONS_ID}">
                     <div class="dsf-menu-wrap">
-                        <button id="${UI.IMPORT_ID}" type="button" class="menu_button" title="Import Dynamic Fields.">Import</button>
+                        <button id="${UI.IMPORT_ID}" type="button" class="menu_button" title="Import Character Dynamic Fields.">Import</button>
                         <div id="${UI.IMPORT_MENU_ID}" class="dsf-menu">
-                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.CHARACTER_CARD}">Character Card</button>
+                            <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.CHARACTER_CARD}">Character Description</button>
                             <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.NATIVE_FIELDS}">SillyTavern Fields</button>
                             <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.FILE_JSON}">File (JSON)</button>
                             <button type="button" class="menu_button" data-dsf-import="${IMPORT_SOURCE.CLIPBOARD_JSON}">Clipboard (JSON)</button>
@@ -3526,7 +5764,7 @@ function mountUi() {
                     </div>
 
                     <div class="dsf-menu-wrap">
-                        <button id="${UI.EXPORT_ID}" type="button" class="menu_button" title="Export Dynamic Fields.">Export</button>
+                        <button id="${UI.EXPORT_ID}" type="button" class="menu_button" title="Export Character Dynamic Fields.">Export</button>
                         <div id="${UI.EXPORT_MENU_ID}" class="dsf-menu">
                             <button type="button" class="menu_button" data-dsf-export="${EXPORT_TARGET.FILE_JSON}">File (JSON)</button>
                             <button type="button" class="menu_button" data-dsf-export="${EXPORT_TARGET.CLIPBOARD_JSON}">Clipboard (JSON)</button>
@@ -3544,8 +5782,7 @@ function mountUi() {
             </div>
         `);
 
-        // $description.before($bar);
-		getDescriptionInsertTarget($description).before($bar);
+        getDescriptionInsertTarget($description).before($bar);
     }
 
     bindUiHandlers();
@@ -3555,7 +5792,87 @@ function mountUi() {
 }
 
 // -----------------------------------------------------------------------------
-// User Interface Rendering - Visibility
+// User Interface Rendering - Persona Mount
+// -----------------------------------------------------------------------------
+
+function mountPersonaUi() {
+    const $description = getPersonaDescriptionTextarea();
+
+    if (!$description.length) {
+        return;
+    }
+
+    ensureStyles();
+
+    if (!$(`#${UI.PERSONA_BAR_ID}`).length) {
+        const $bar = $(`
+            <div id="${UI.PERSONA_BAR_ID}" data-target-scope="${TARGET_SCOPE.PERSONA}">
+                <div class="dsf-top-controls">
+                    <div class="dsf-left-controls">
+                        <label class="checkbox_label dsf-dynamic-toggle-label" title="When enabled, Persona Description is hidden in Persona Management, native personaDescription is disabled in Prompt Manager, and Persona Description (Evolutia) is enabled. Persona Dynamic Fields support Prompt Manager / story-string injection only.">
+                            <input id="${UI.PERSONA_SWAP_ID}" type="checkbox" />
+                            <span>Dynamic Fields</span>
+                        </label>
+                    </div>
+
+                    <div class="dsf-top-action-row">
+                        <button
+                            id="${UI.PERSONA_DELETE_ALL_TOP_ID}"
+                            type="button"
+                            class="menu_button danger_button"
+                            title="Delete all Persona Dynamic Fields for this persona."
+                        >
+                            Delete All
+                        </button>
+
+                        <button id="${UI.PERSONA_ADD_TOP_ID}" type="button" class="menu_button">Add Field</button>
+                    </div>
+                </div>
+
+                <div id="${UI.PERSONA_PANEL_ID}" data-target-scope="${TARGET_SCOPE.PERSONA}"></div>
+
+                <div id="${UI.PERSONA_BOTTOM_ACTIONS_ID}">
+                    <div class="dsf-menu-wrap">
+                        <button id="${UI.PERSONA_IMPORT_ID}" type="button" class="menu_button" title="Import Persona Dynamic Fields.">Import</button>
+                        <div id="${UI.PERSONA_IMPORT_MENU_ID}" class="dsf-menu">
+                            <button type="button" class="menu_button" data-dsf-persona-import="${IMPORT_SOURCE.PERSONA_DESCRIPTION}">Persona Description</button>
+                            <button type="button" class="menu_button" data-dsf-persona-import="${IMPORT_SOURCE.FILE_JSON}">File (JSON)</button>
+                            <button type="button" class="menu_button" data-dsf-persona-import="${IMPORT_SOURCE.CLIPBOARD_JSON}">Clipboard (JSON)</button>
+                        </div>
+                    </div>
+
+                    <div class="dsf-menu-wrap">
+                        <button id="${UI.PERSONA_EXPORT_ID}" type="button" class="menu_button" title="Export Persona Dynamic Fields.">Export</button>
+                        <div id="${UI.PERSONA_EXPORT_MENU_ID}" class="dsf-menu">
+                            <button type="button" class="menu_button" data-dsf-persona-export="${EXPORT_TARGET.FILE_JSON}">File (JSON)</button>
+                            <button type="button" class="menu_button" data-dsf-persona-export="${EXPORT_TARGET.CLIPBOARD_JSON}">Clipboard (JSON)</button>
+                        </div>
+                    </div>
+
+                    <button id="${UI.PERSONA_ADD_BOTTOM_ID}" type="button" class="menu_button">Add Field</button>
+                    <input id="${UI.PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID}" type="file" accept=".json,application/json" hidden>
+                </div>
+
+                <div id="${UI.PERSONA_TOKEN_ROW_ID}">
+                    <span id="${UI.PERSONA_TOKEN_ID}" aria-live="polite"></span>
+                </div>
+            </div>
+        `);
+
+        getPersonaDescriptionInsertTarget($description).before($bar);
+    }
+
+    if (typeof bindPersonaUiHandlers === 'function') {
+        bindPersonaUiHandlers();
+    }
+
+    renderPersonaPanel();
+    applyPersonaUiVisibility();
+    updatePersonaTokenEstimate();
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Character Visibility
 // -----------------------------------------------------------------------------
 
 function applyUiVisibility() {
@@ -3574,8 +5891,8 @@ function applyUiVisibility() {
         .attr(
             'title',
             hasFields
-                ? 'Delete all Dynamic Fields for this character.'
-                : 'There are no Dynamic Fields to delete.',
+                ? 'Delete all Character Dynamic Fields for this character.'
+                : 'There are no Character Dynamic Fields to delete.',
         );
 
     $(`#${UI.ADD_TOP_ID}`).toggle(state.swapEnabled);
@@ -3584,13 +5901,54 @@ function applyUiVisibility() {
     $(`#${UI.ADD_BOTTOM_ID}`).toggle(state.swapEnabled);
     $(`#${UI.TOKEN_ROW_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
 
-    getDescriptionInsertTarget($description).toggle(!state.swapEnabled);
+    if ($description.length) {
+        getDescriptionInsertTarget($description).toggle(!state.swapEnabled);
+    }
+
     $panel.toggle(state.swapEnabled);
     setStandardTokenCounterHidden(state.swapEnabled);
 }
 
 // -----------------------------------------------------------------------------
-// User Interface Rendering - Field List
+// User Interface Rendering - Persona Visibility
+// -----------------------------------------------------------------------------
+
+function applyPersonaUiVisibility() {
+    const personaId = getActivePersonaId();
+    const state = personaId ? readPersonaState(personaId) : createOutOfBoxPersonaState();
+    const $description = getPersonaDescriptionTextarea();
+    const $panel = $(`#${UI.PERSONA_PANEL_ID}`);
+    const hasFields = state.fields.length > 0;
+
+    $(`#${UI.PERSONA_SWAP_ID}`).prop('checked', state.swapEnabled);
+
+    $(`#${UI.PERSONA_DELETE_ALL_TOP_ID}`)
+        .toggle(state.swapEnabled)
+        .prop('disabled', !hasFields)
+        .toggleClass('disabled', !hasFields)
+        .attr(
+            'title',
+            hasFields
+                ? 'Delete all Persona Dynamic Fields for this persona.'
+                : 'There are no Persona Dynamic Fields to delete.',
+        );
+
+    $(`#${UI.PERSONA_ADD_TOP_ID}`).toggle(state.swapEnabled);
+    $(`#${UI.PERSONA_BAR_ID} .dsf-top-action-row`).css('display', state.swapEnabled ? 'flex' : 'none');
+    $(`#${UI.PERSONA_BOTTOM_ACTIONS_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
+    $(`#${UI.PERSONA_ADD_BOTTOM_ID}`).toggle(state.swapEnabled);
+    $(`#${UI.PERSONA_TOKEN_ROW_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
+
+    if ($description.length) {
+        getPersonaDescriptionVisibilityTarget($description).toggle(!state.swapEnabled);
+    }
+
+    $panel.toggle(state.swapEnabled);
+    setPersonaTokenCounterHidden(state.swapEnabled);
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Character Field List
 // -----------------------------------------------------------------------------
 
 function renderPanel() {
@@ -3603,11 +5961,13 @@ function renderPanel() {
     }
 
     const fieldsHtml = state.fields.length
-        ? state.fields.map((field, index) => renderFieldHtml(field, index)).join('')
-        : '<div class="dsf-empty">No dynamic fields yet.</div>';
+        ? state.fields.map((field, index) => renderFieldHtml(field, index, {
+            targetScope: TARGET_SCOPE.CHARACTER,
+        })).join('')
+        : '<div class="dsf-empty">No Character Dynamic Fields yet.</div>';
 
     $panel.html(`
-        <div class="dsf-fields">
+        <div class="dsf-fields" data-target-scope="${TARGET_SCOPE.CHARACTER}">
             ${fieldsHtml}
         </div>
     `);
@@ -3616,8 +5976,42 @@ function renderPanel() {
     updateTokenEstimate();
 }
 
-function renderFieldHtml(field, index = 0) {
-    const normalized = normalizeField(field);
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Persona Field List
+// -----------------------------------------------------------------------------
+
+function renderPersonaPanel() {
+    const personaId = getActivePersonaId();
+    const state = personaId ? readPersonaState(personaId) : createOutOfBoxPersonaState();
+    const $panel = $(`#${UI.PERSONA_PANEL_ID}`);
+
+    if (!$panel.length) {
+        return;
+    }
+
+    const fieldsHtml = state.fields.length
+        ? state.fields.map((field, index) => renderFieldHtml(field, index, {
+            targetScope: TARGET_SCOPE.PERSONA,
+        })).join('')
+        : '<div class="dsf-empty">No Persona Dynamic Fields yet.</div>';
+
+    $panel.html(`
+        <div class="dsf-fields" data-target-scope="${TARGET_SCOPE.PERSONA}">
+            ${fieldsHtml}
+        </div>
+    `);
+
+    applyPersonaUiVisibility();
+    updatePersonaTokenEstimate();
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Rendering - Field HTML
+// -----------------------------------------------------------------------------
+
+function renderFieldHtml(field, index = 0, { targetScope = TARGET_SCOPE.CHARACTER } = {}) {
+    const isPersona = targetScope === TARGET_SCOPE.PERSONA;
+    const normalized = isPersona ? normalizePersonaField(field) : normalizeCharacterField(field);
     const triggerSources = normalizeTriggerSources(normalized.triggerSources);
 
     const triggerSourceOptionsHtml = Object.values(TRIGGER_SOURCE)
@@ -3634,8 +6028,26 @@ function renderFieldHtml(field, index = 0) {
         `)
         .join('');
 
+    const triggerActionsHtml = isPersona
+        ? ''
+        : `
+            <div class="dsf-trigger-control-row">
+                <div class="dsf-trigger-actions-wrap">
+                    <button type="button" class="menu_button dsf-trigger-actions-button">Trigger Actions</button>
+                    <div class="dsf-trigger-actions-menu">
+                        <div class="dsf-label">Actions</div>
+                        <textarea class="text_pole dsf-trigger-action-instruction" placeholder="Example: I transform into a werewolf.">${escapeTextarea(normalized.triggerActionInstruction)}</textarea>
+                    </div>
+                </div>
+            </div>
+        `;
+
     return `
-        <div class="dsf-field" data-field-id="${escapeAttribute(normalized.id)}">
+        <div
+            class="dsf-field"
+            data-field-id="${escapeAttribute(normalized.id)}"
+            data-target-scope="${escapeAttribute(targetScope)}"
+        >
             <div class="dsf-field-top-row">
                 <div class="dsf-field-order-wrap">
                     <button type="button" class="menu_button dsf-drag-handle" title="Hold and drag to reorder">↕</button>
@@ -3680,7 +6092,7 @@ function renderFieldHtml(field, index = 0) {
 
                             <div class="dsf-keyword-trigger-group">
                                 <div class="dsf-label">Enabling Triggers (Separate by comma, semicolon, or newline).</div>
-                                <textarea class="text_pole dsf-enabling-triggers dsf-trigger-textarea" placeholder="Example: nightwear">${escapeTextarea(normalized.enablingTriggers)}</textarea>
+                                <textarea class="text_pole dsf-enabling-triggers dsf-trigger-textarea" placeholder="Example: werewolf transformation">${escapeTextarea(normalized.enablingTriggers)}</textarea>
                                 <div class="dsf-trigger-mode-row">
                                     <label class="dsf-keyword-mode-wrap" title="Any means at least one enabling trigger must match. All means every enabling trigger must match.">
                                         <span>Match</span>
@@ -3694,7 +6106,7 @@ function renderFieldHtml(field, index = 0) {
 
                             <div class="dsf-keyword-trigger-group">
                                 <div class="dsf-label">Disabling Triggers (Separate by comma, semicolon, or newline).</div>
-                                <textarea class="text_pole dsf-disabling-triggers dsf-trigger-textarea" placeholder="Example: outer wear">${escapeTextarea(normalized.disablingTriggers)}</textarea>
+                                <textarea class="text_pole dsf-disabling-triggers dsf-trigger-textarea" placeholder="Example: human transformation">${escapeTextarea(normalized.disablingTriggers)}</textarea>
                                 <div class="dsf-trigger-mode-row">
                                     <label class="dsf-keyword-mode-wrap" title="Any means at least one disabling trigger must match. All means every disabling trigger must match.">
                                         <span>Match</span>
@@ -3709,15 +6121,7 @@ function renderFieldHtml(field, index = 0) {
                     </div>
                 </div>
 
-                <div class="dsf-trigger-control-row">
-                    <div class="dsf-trigger-actions-wrap">
-                        <button type="button" class="menu_button dsf-trigger-actions-button">Trigger Actions</button>
-                        <div class="dsf-trigger-actions-menu">
-                            <div class="dsf-label">Actions</div>
-                            <textarea class="text_pole dsf-trigger-action-instruction" placeholder="Example: I get dressed in my nightwear.">${escapeTextarea(normalized.triggerActionInstruction)}</textarea>
-                        </div>
-                    </div>
-                </div>
+                ${triggerActionsHtml}
 
                 <div class="dsf-trigger-control-row">
                     <div class="dsf-triggered-by-wrap">
@@ -3750,33 +6154,106 @@ function renderFieldHtml(field, index = 0) {
 // Section 15. User Interface Events
 // ============================================================================
 // Purpose:
-// - Own DOM event binding for controls and field editors.
-// - UI rendering may call this after mounting.
+// - Own DOM event binding for Character Dynamic Fields controls.
+// - Own DOM event binding for Persona Dynamic Fields controls.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// User Interface Events - Top Bar Controls
+// User Interface Events - Target Scope Helpers
+// -----------------------------------------------------------------------------
+
+function getFieldTargetScope($field) {
+    const rawScope = String(
+        $field?.attr('data-target-scope') ||
+        $field?.closest('[data-target-scope]').attr('data-target-scope') ||
+        '',
+    );
+
+    return rawScope === TARGET_SCOPE.PERSONA
+        ? TARGET_SCOPE.PERSONA
+        : TARGET_SCOPE.CHARACTER;
+}
+
+function getPanelSelectorForTargetScope(targetScope) {
+    return targetScope === TARGET_SCOPE.PERSONA
+        ? `#${UI.PERSONA_PANEL_ID}`
+        : `#${UI.PANEL_ID}`;
+}
+
+function normalizeFieldForTargetScope(field, targetScope) {
+    return targetScope === TARGET_SCOPE.PERSONA
+        ? normalizePersonaField(field)
+        : normalizeCharacterField(field);
+}
+
+function updateStateForTargetScope(targetScope, mutator, options = {}) {
+    if (targetScope === TARGET_SCOPE.PERSONA) {
+        updatePersonaState(mutator, options);
+        return;
+    }
+
+    updateState(mutator, options);
+}
+
+function getFieldStateOptionsForTargetScope(targetScope, options = {}) {
+    return {
+        ...options,
+        targetScope,
+        includeTriggerActions: targetScope !== TARGET_SCOPE.PERSONA,
+    };
+}
+
+function createBlankFieldForTargetScope(targetScope) {
+    return normalizeFieldForTargetScope({
+        name: '',
+        activatingTriggers: '',
+        enablingTriggers: '',
+        disablingTriggers: '',
+        triggerSources: [...DEFAULT_TRIGGER_SOURCES],
+        activatingKeywordMode: KEYWORD_MODE.ALL,
+        enablingKeywordMode: KEYWORD_MODE.ALL,
+        disablingKeywordMode: KEYWORD_MODE.ALL,
+        triggerActionInstruction: '',
+        triggerActionPhase: TRIGGER_ACTION_PHASE.IDLE,
+        triggerActionGenerationId: 0,
+        triggerActionEnabledByGeneration: false,
+        content: '',
+        enabled: true,
+    }, targetScope);
+}
+
+function getCurrentPanelFieldOrder(targetScope) {
+    return $(`${getPanelSelectorForTargetScope(targetScope)} .dsf-field`)
+        .map(function mapFieldId() {
+            return String($(this).attr('data-field-id') || $(this).data('field-id') || '');
+        })
+        .get()
+        .filter(Boolean);
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Events - Character Top Bar Controls
 // -----------------------------------------------------------------------------
 
 function deleteAllDynamicFieldsForCurrentCharacter() {
     const characterId = getActiveCharacterId();
 
     if (characterId === undefined) {
-        notify('warning', 'Select a character before deleting Dynamic Fields.');
+        notify('warning', 'Select a character before deleting Character Dynamic Fields.');
         return;
     }
 
     const state = readState(characterId);
 
     if (!state.fields.length) {
-        notify('info', 'There are no Dynamic Fields to delete.');
+        notify('info', 'There are no Character Dynamic Fields to delete.');
         applyUiVisibility();
         return;
     }
 
     const confirmed = window.confirm(
-        'Delete all Dynamic Fields for this character?\n\n' +
-        'This only affects Aspect: Evolutia Dynamic Fields. Native SillyTavern fields are not changed.',
+        'Delete all Character Dynamic Fields for this character?\n\n' +
+        'This only affects Aspect: Evolutia Character Dynamic Fields. Native SillyTavern fields are not changed.',
     );
 
     if (!confirmed) {
@@ -3787,7 +6264,7 @@ function deleteAllDynamicFieldsForCurrentCharacter() {
         nextState.fields = [];
     }, { rerender: true });
 
-    notify('success', 'Deleted all Dynamic Fields for this character.');
+    notify('success', 'Deleted all Character Dynamic Fields for this character.');
 }
 
 function bindUiHandlers() {
@@ -3807,22 +6284,70 @@ function bindUiHandlers() {
         .off(`click.${MODULE_NAME}`, `#${UI.ADD_TOP_ID}, #${UI.ADD_BOTTOM_ID}`)
         .on(`click.${MODULE_NAME}`, `#${UI.ADD_TOP_ID}, #${UI.ADD_BOTTOM_ID}`, function onAddField() {
             updateState((state) => {
-                state.fields.push(normalizeField({
-                    name: '',
-                    activatingTriggers: '',
-                    enablingTriggers: '',
-                    disablingTriggers: '',
-                    triggerSources: [...DEFAULT_TRIGGER_SOURCES],
-                    activatingKeywordMode: KEYWORD_MODE.ALL,
-                    enablingKeywordMode: KEYWORD_MODE.ALL,
-                    disablingKeywordMode: KEYWORD_MODE.ALL,
-                    triggerActionInstruction: '',
-                    triggerActionPhase: TRIGGER_ACTION_PHASE.IDLE,
-                    triggerActionGenerationId: 0,
-                    triggerActionEnabledByGeneration: false,
-                    content: '',
-                    enabled: true,
-                }));
+                state.fields.push(createBlankFieldForTargetScope(TARGET_SCOPE.CHARACTER));
+            }, { rerender: true });
+        });
+
+    bindFieldEditHandlers();
+    bindFieldActionHandlers();
+    bindFieldReorderHandlers();
+    bindImportExportHandlers();
+}
+
+// -----------------------------------------------------------------------------
+// User Interface Events - Persona Top Bar Controls
+// -----------------------------------------------------------------------------
+
+function deleteAllDynamicFieldsForCurrentPersona() {
+    const personaId = getActivePersonaId();
+
+    if (!personaId) {
+        notify('warning', 'Select a persona before deleting Persona Dynamic Fields.');
+        return;
+    }
+
+    const state = readPersonaState(personaId);
+
+    if (!state.fields.length) {
+        notify('info', 'There are no Persona Dynamic Fields to delete.');
+        applyPersonaUiVisibility();
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Delete all Persona Dynamic Fields for this persona?\n\n' +
+        'This only affects Aspect: Evolutia Persona Dynamic Fields. Native SillyTavern Persona Description is not changed.',
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    updatePersonaState((nextState) => {
+        nextState.fields = [];
+    }, { rerender: true });
+
+    notify('success', 'Deleted all Persona Dynamic Fields for this persona.');
+}
+
+function bindPersonaUiHandlers() {
+    $(document)
+        .off(`change.${MODULE_NAME}`, `#${UI.PERSONA_SWAP_ID}`)
+        .on(`change.${MODULE_NAME}`, `#${UI.PERSONA_SWAP_ID}`, function onPersonaSwapChanged() {
+            updatePersonaState((state) => {
+                state.swapEnabled = Boolean(this.checked);
+            }, { rerender: false, syncPromptManager: true });
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.PERSONA_DELETE_ALL_TOP_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.PERSONA_DELETE_ALL_TOP_ID}`, deleteAllDynamicFieldsForCurrentPersona);
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.PERSONA_ADD_TOP_ID}, #${UI.PERSONA_ADD_BOTTOM_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.PERSONA_ADD_TOP_ID}, #${UI.PERSONA_ADD_BOTTOM_ID}`, function onPersonaAddField() {
+            updatePersonaState((state) => {
+                state.fields.push(createBlankFieldForTargetScope(TARGET_SCOPE.PERSONA));
             }, { rerender: true });
         });
 
@@ -3840,9 +6365,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`change.${MODULE_NAME}`, '.dsf-field-enabled')
         .on(`change.${MODULE_NAME}`, '.dsf-field-enabled', function onFieldEnabledChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
 
                 if (!field) {
@@ -3860,9 +6387,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-field-name')
         .on(`input.${MODULE_NAME}`, '.dsf-field-name', function onFieldNameChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.name = this.value;
             }, { rerender: false });
@@ -3871,9 +6400,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-activating-triggers')
         .on(`input.${MODULE_NAME}`, '.dsf-activating-triggers', function onActivatingTriggersChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.activatingTriggers = this.value;
             }, { rerender: false });
@@ -3882,9 +6413,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-enabling-triggers')
         .on(`input.${MODULE_NAME}`, '.dsf-enabling-triggers', function onEnablingTriggersChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.enablingTriggers = this.value;
             }, { rerender: false });
@@ -3893,9 +6426,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-disabling-triggers')
         .on(`input.${MODULE_NAME}`, '.dsf-disabling-triggers', function onDisablingTriggersChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.disablingTriggers = this.value;
             }, { rerender: false });
@@ -3904,9 +6439,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`change.${MODULE_NAME}`, '.dsf-activating-keyword-mode')
         .on(`change.${MODULE_NAME}`, '.dsf-activating-keyword-mode', function onActivatingKeywordModeChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.activatingKeywordMode = normalizeKeywordMode(this.value);
             }, { rerender: false });
@@ -3915,9 +6452,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`change.${MODULE_NAME}`, '.dsf-enabling-keyword-mode')
         .on(`change.${MODULE_NAME}`, '.dsf-enabling-keyword-mode', function onEnablingKeywordModeChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.enablingKeywordMode = normalizeKeywordMode(this.value);
             }, { rerender: false });
@@ -3926,9 +6465,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`change.${MODULE_NAME}`, '.dsf-disabling-keyword-mode')
         .on(`change.${MODULE_NAME}`, '.dsf-disabling-keyword-mode', function onDisablingKeywordModeChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.disablingKeywordMode = normalizeKeywordMode(this.value);
             }, { rerender: false });
@@ -3938,7 +6479,8 @@ function bindFieldEditHandlers() {
         .off(`change.${MODULE_NAME}`, '.dsf-trigger-source')
         .on(`change.${MODULE_NAME}`, '.dsf-trigger-source', function onTriggerSourceChanged() {
             const $field = $(this).closest('.dsf-field');
-            const fieldId = $field.data('field-id');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
             const selectedSources = $field
                 .find('.dsf-trigger-source:checked')
                 .map(function mapSource() {
@@ -3946,7 +6488,7 @@ function bindFieldEditHandlers() {
                 })
                 .get();
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.triggerSources = normalizeTriggerSources(selectedSources);
             }, { rerender: false });
@@ -3955,7 +6497,13 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-trigger-action-instruction')
         .on(`input.${MODULE_NAME}`, '.dsf-trigger-action-instruction', function onTriggerActionInstructionChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
+
+            if (targetScope === TARGET_SCOPE.PERSONA) {
+                return;
+            }
 
             updateState((state) => {
                 const field = findField(state, fieldId);
@@ -3966,9 +6514,11 @@ function bindFieldEditHandlers() {
     $(document)
         .off(`input.${MODULE_NAME}`, '.dsf-content')
         .on(`input.${MODULE_NAME}`, '.dsf-content', function onContentChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 const field = findField(state, fieldId);
                 if (field) field.content = this.value;
             }, { rerender: false });
@@ -3983,30 +6533,34 @@ function bindFieldActionHandlers() {
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-delete-field')
         .on(`click.${MODULE_NAME}`, '.dsf-delete-field', function onDeleteField() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
-                state.fields = state.fields.filter((field) => field.id !== fieldId);
+            updateStateForTargetScope(targetScope, (state) => {
+                state.fields = state.fields.filter((field) => String(field.id) !== fieldId);
             }, { rerender: true });
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-duplicate-field')
         .on(`click.${MODULE_NAME}`, '.dsf-duplicate-field', function onDuplicateField() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
-            updateState((state) => {
-                const index = state.fields.findIndex((field) => field.id === fieldId);
+            updateStateForTargetScope(targetScope, (state) => {
+                const index = state.fields.findIndex((field) => String(field.id) === fieldId);
                 if (index === -1) return;
 
-                const copy = normalizeField({
+                const copy = normalizeFieldForTargetScope({
                     ...state.fields[index],
                     id: makeId(),
                     name: `${state.fields[index].name || 'Field'} Copy`,
                     triggerActionPhase: TRIGGER_ACTION_PHASE.IDLE,
                     triggerActionGenerationId: 0,
                     triggerActionEnabledByGeneration: false,
-                });
+                }, targetScope);
 
                 state.fields.splice(index + 1, 0, copy);
             }, { rerender: true });
@@ -4018,7 +6572,7 @@ function bindFieldActionHandlers() {
 // -----------------------------------------------------------------------------
 
 function moveFieldToOrder(state, fieldId, requestedOrder) {
-    const currentIndex = state.fields.findIndex((field) => field.id === fieldId);
+    const currentIndex = state.fields.findIndex((field) => String(field.id) === String(fieldId));
 
     if (currentIndex === -1) {
         return;
@@ -4030,19 +6584,14 @@ function moveFieldToOrder(state, fieldId, requestedOrder) {
     state.fields.splice(boundedOrder - 1, 0, field);
 }
 
-function commitDomFieldOrder() {
-    const orderedIds = $(`#${UI.PANEL_ID} .dsf-field`)
-        .map(function mapFieldId() {
-            return String($(this).data('field-id') || '');
-        })
-        .get()
-        .filter(Boolean);
+function commitDomFieldOrder(targetScope = TARGET_SCOPE.CHARACTER) {
+    const orderedIds = getCurrentPanelFieldOrder(targetScope);
 
     if (!orderedIds.length) {
         return;
     }
 
-    updateState((state) => {
+    updateStateForTargetScope(targetScope, (state) => {
         const fieldsById = new Map(state.fields.map((field) => [String(field.id), field]));
         const orderedFields = orderedIds
             .map((fieldId) => fieldsById.get(String(fieldId)))
@@ -4138,6 +6687,12 @@ function moveDraggedFieldAtPoint(clientX, clientY) {
         return;
     }
 
+    const targetScope = String(targetField.getAttribute('data-target-scope') || TARGET_SCOPE.CHARACTER);
+
+    if (targetScope !== fieldPointerDrag.targetScope) {
+        return;
+    }
+
     const rect = targetField.getBoundingClientRect();
     const placeAfter = clientY > rect.top + rect.height / 2;
 
@@ -4193,14 +6748,16 @@ function bindFieldReorderHandlers() {
     $(document)
         .off(`change.${MODULE_NAME}`, '.dsf-field-order')
         .on(`change.${MODULE_NAME}`, '.dsf-field-order', function onOrderChanged() {
-            const fieldId = $(this).closest('.dsf-field').data('field-id');
+            const $field = $(this).closest('.dsf-field');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
             const cleanedValue = String(this.value || '').replace(/[^\d]/g, '');
             const requestedOrder = Number(cleanedValue || 1);
 
             this.value = String(requestedOrder);
             syncPositionInputWidth(this);
 
-            updateState((state) => {
+            updateStateForTargetScope(targetScope, (state) => {
                 moveFieldToOrder(state, fieldId, requestedOrder);
             }, { rerender: true });
         });
@@ -4210,7 +6767,8 @@ function bindFieldReorderHandlers() {
         .on(`pointerdown.${MODULE_NAME}`, '.dsf-drag-handle', function onPointerDown(event) {
             const originalEvent = event.originalEvent;
             const $field = $(this).closest('.dsf-field');
-            const fieldId = String($field.data('field-id') || '');
+            const fieldId = String($field.attr('data-field-id') || $field.data('field-id') || '');
+            const targetScope = getFieldTargetScope($field);
 
             if (!fieldId || !originalEvent) {
                 return;
@@ -4220,6 +6778,7 @@ function bindFieldReorderHandlers() {
 
             fieldPointerDrag = {
                 fieldId,
+                targetScope,
                 pointerId: originalEvent.pointerId,
                 fieldElement: $field[0],
                 scrollElement: getFieldDragScrollParent($field[0]),
@@ -4273,21 +6832,18 @@ function bindFieldReorderHandlers() {
                 return;
             }
 
+            const targetScope = fieldPointerDrag.targetScope;
+
             $('.dsf-field').removeClass('dsf-dragging');
             stopFieldDragAutoScroll();
             fieldPointerDrag = null;
-            commitDomFieldOrder();
+            commitDomFieldOrder(targetScope);
         });
 }
 
 // -----------------------------------------------------------------------------
-// User Interface Events - Import / Export Menus
+// User Interface Events - Import / Export and Field Menus
 // -----------------------------------------------------------------------------
-
-function closeImportExportMenus() {
-    $(`#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`).removeClass('dsf-menu-open');
-    closeFieldMenus();
-}
 
 function closeFieldMenus() {
     $('.dsf-keyword-triggers-menu, .dsf-trigger-actions-menu, .dsf-triggered-by-menu')
@@ -4296,6 +6852,13 @@ function closeFieldMenus() {
             '--dsf-menu-left': '',
             '--dsf-menu-top': '',
         });
+}
+
+function closeImportExportMenus() {
+    $(`#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}, #${UI.PERSONA_IMPORT_MENU_ID}, #${UI.PERSONA_EXPORT_MENU_ID}`)
+        .removeClass('dsf-menu-open');
+
+    closeFieldMenus();
 }
 
 function toggleMenu(menuId) {
@@ -4329,6 +6892,10 @@ function positionFloatingFieldMenuInViewport($menu, button) {
     });
 
     requestAnimationFrame(() => {
+        if (!$menu.hasClass('dsf-menu-open')) {
+            return;
+        }
+
         const menuWidth = Math.min(
             menuElement.offsetWidth || 210,
             window.innerWidth - (margin * 2),
@@ -4361,40 +6928,59 @@ function toggleSiblingFieldMenu(button, menuSelector) {
     const $menu = $(button).siblings(menuSelector);
     const wasOpen = $menu.hasClass('dsf-menu-open');
 
-    closeFieldMenus();
+    closeImportExportMenus();
 
     if (!wasOpen) {
         $menu.addClass('dsf-menu-open');
-
-        if (
-            menuSelector === '.dsf-keyword-triggers-menu' ||
-            menuSelector === '.dsf-trigger-actions-menu' ||
-            menuSelector === '.dsf-triggered-by-menu'
-        ) {
-            positionFloatingFieldMenuInViewport($menu, button);
-        }
+        positionFloatingFieldMenuInViewport($menu, button);
     }
+}
+
+function isDynamicFieldsMenuTarget(target) {
+    const $target = $(target);
+
+    return Boolean(
+        $target.closest([
+            '.dsf-menu-wrap',
+            '.dsf-menu',
+            '.dsf-keyword-triggers-wrap',
+            '.dsf-trigger-actions-wrap',
+            '.dsf-triggered-by-wrap',
+            '.dsf-keyword-triggers-menu',
+            '.dsf-trigger-actions-menu',
+            '.dsf-triggered-by-menu',
+            '.dsf-keyword-triggers-button',
+            '.dsf-trigger-actions-button',
+            '.dsf-triggered-by-button',
+        ].join(', ')).length,
+    );
+}
+
+function stopMenuEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
 }
 
 function bindImportExportHandlers() {
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-keyword-triggers-button')
         .on(`click.${MODULE_NAME}`, '.dsf-keyword-triggers-button', function onKeywordTriggersClicked(event) {
-            event.stopPropagation();
+            stopMenuEvent(event);
             toggleSiblingFieldMenu(this, '.dsf-keyword-triggers-menu');
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-trigger-actions-button')
         .on(`click.${MODULE_NAME}`, '.dsf-trigger-actions-button', function onTriggerActionsClicked(event) {
-            event.stopPropagation();
+            stopMenuEvent(event);
             toggleSiblingFieldMenu(this, '.dsf-trigger-actions-menu');
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, '.dsf-triggered-by-button')
         .on(`click.${MODULE_NAME}`, '.dsf-triggered-by-button', function onTriggerSourcesClicked(event) {
-            event.stopPropagation();
+            stopMenuEvent(event);
             toggleSiblingFieldMenu(this, '.dsf-triggered-by-menu');
         });
 
@@ -4402,31 +6988,50 @@ function bindImportExportHandlers() {
         .off(`click.${MODULE_NAME}`, '.dsf-keyword-triggers-menu, .dsf-trigger-actions-menu, .dsf-triggered-by-menu')
         .on(`click.${MODULE_NAME}`, '.dsf-keyword-triggers-menu, .dsf-trigger-actions-menu, .dsf-triggered-by-menu', function onFieldMenuClicked(event) {
             event.stopPropagation();
+            event.stopImmediatePropagation();
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`)
         .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_ID}`, function onImportClicked(event) {
-            event.stopPropagation();
+            stopMenuEvent(event);
             toggleMenu(UI.IMPORT_MENU_ID);
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, `#${UI.EXPORT_ID}`)
         .on(`click.${MODULE_NAME}`, `#${UI.EXPORT_ID}`, function onExportClicked(event) {
-            event.stopPropagation();
+            stopMenuEvent(event);
             toggleMenu(UI.EXPORT_MENU_ID);
         });
 
     $(document)
-        .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`)
-        .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}`, function onMenuClicked(event) {
+        .off(`click.${MODULE_NAME}`, `#${UI.PERSONA_IMPORT_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.PERSONA_IMPORT_ID}`, function onPersonaImportClicked(event) {
+            stopMenuEvent(event);
+            toggleMenu(UI.PERSONA_IMPORT_MENU_ID);
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.PERSONA_EXPORT_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.PERSONA_EXPORT_ID}`, function onPersonaExportClicked(event) {
+            stopMenuEvent(event);
+            toggleMenu(UI.PERSONA_EXPORT_MENU_ID);
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}, #${UI.PERSONA_IMPORT_MENU_ID}, #${UI.PERSONA_EXPORT_MENU_ID}`)
+        .on(`click.${MODULE_NAME}`, `#${UI.IMPORT_MENU_ID}, #${UI.EXPORT_MENU_ID}, #${UI.PERSONA_IMPORT_MENU_ID}, #${UI.PERSONA_EXPORT_MENU_ID}`, function onMenuClicked(event) {
             event.stopPropagation();
+            event.stopImmediatePropagation();
         });
 
     $(document)
         .off(`click.${MODULE_NAME}`, '[data-dsf-import]')
-        .on(`click.${MODULE_NAME}`, '[data-dsf-import]', function onImportActionClicked() {
+        .on(`click.${MODULE_NAME}`, '[data-dsf-import]', function onImportActionClicked(event) {
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
             const action = String($(this).data('dsf-import') || '');
             closeImportExportMenus();
 
@@ -4443,7 +7048,10 @@ function bindImportExportHandlers() {
 
     $(document)
         .off(`click.${MODULE_NAME}`, '[data-dsf-export]')
-        .on(`click.${MODULE_NAME}`, '[data-dsf-export]', function onExportActionClicked() {
+        .on(`click.${MODULE_NAME}`, '[data-dsf-export]', function onExportActionClicked(event) {
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
             const action = String($(this).data('dsf-export') || '');
             closeImportExportMenus();
 
@@ -4451,6 +7059,40 @@ function bindImportExportHandlers() {
                 exportDynamicFieldsToFileJson();
             } else if (action === EXPORT_TARGET.CLIPBOARD_JSON) {
                 exportDynamicFieldsToClipboardJson();
+            }
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '[data-dsf-persona-import]')
+        .on(`click.${MODULE_NAME}`, '[data-dsf-persona-import]', function onPersonaImportActionClicked(event) {
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
+            const action = String($(this).data('dsf-persona-import') || '');
+            closeImportExportMenus();
+
+            if (action === IMPORT_SOURCE.PERSONA_DESCRIPTION) {
+                importPersonaDynamicFieldsFromPersonaDescription();
+            } else if (action === IMPORT_SOURCE.FILE_JSON) {
+                importPersonaDynamicFieldsFromFileJson();
+            } else if (action === IMPORT_SOURCE.CLIPBOARD_JSON) {
+                importPersonaDynamicFieldsFromClipboardJson();
+            }
+        });
+
+    $(document)
+        .off(`click.${MODULE_NAME}`, '[data-dsf-persona-export]')
+        .on(`click.${MODULE_NAME}`, '[data-dsf-persona-export]', function onPersonaExportActionClicked(event) {
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
+            const action = String($(this).data('dsf-persona-export') || '');
+            closeImportExportMenus();
+
+            if (action === EXPORT_TARGET.FILE_JSON) {
+                exportPersonaDynamicFieldsToFileJson();
+            } else if (action === EXPORT_TARGET.CLIPBOARD_JSON) {
+                exportPersonaDynamicFieldsToClipboardJson();
             }
         });
 
@@ -4463,14 +7105,22 @@ function bindImportExportHandlers() {
         .on(`change.${MODULE_NAME}`, `#${UI.DYNAMIC_FIELDS_IMPORT_FILE_ID}`, handleDynamicFieldsImportFileSelected);
 
     $(document)
+        .off(`change.${MODULE_NAME}`, `#${UI.PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID}`)
+        .on(`change.${MODULE_NAME}`, `#${UI.PERSONA_DYNAMIC_FIELDS_IMPORT_FILE_ID}`, handlePersonaDynamicFieldsImportFileSelected);
+
+    $(document)
         .off(`click.${MODULE_NAME}.menus`)
         .on(`click.${MODULE_NAME}.menus`, function onDocumentClickedForMenus(event) {
-            const $target = $(event.target);
-
-            if ($target.closest('.dsf-keyword-triggers-wrap, .dsf-trigger-actions-wrap, .dsf-triggered-by-wrap, .dsf-menu-wrap').length) {
+            if (isDynamicFieldsMenuTarget(event.target)) {
                 return;
             }
 
+            closeImportExportMenus();
+        });
+
+    $(window)
+        .off(`resize.${MODULE_NAME}.menus scroll.${MODULE_NAME}.menus`)
+        .on(`resize.${MODULE_NAME}.menus scroll.${MODULE_NAME}.menus`, function onViewportChangedForMenus() {
             closeImportExportMenus();
         });
 }
@@ -4480,35 +7130,124 @@ function bindImportExportHandlers() {
 // ============================================================================
 // Purpose:
 // - Own Prompt Interceptor preparation and generation completion cleanup.
-// - The interceptor prepares Dynamic Fields output before prompt construction.
-// - The Prompt Manager macro only reads prepared output and must not mutate state.
 // ============================================================================
+
+// -----------------------------------------------------------------------------
+// Generation Flow - Interceptor Argument Helpers
+// -----------------------------------------------------------------------------
+
+function getInterceptorOptionsFromArgs(args = []) {
+    const objects = args.filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+
+    return Object.assign({}, ...objects);
+}
+
+function getInterceptorChatFromArgs(args = []) {
+    const firstArray = args.find((entry) => Array.isArray(entry));
+
+    if (Array.isArray(firstArray)) {
+        return firstArray;
+    }
+
+    const options = getInterceptorOptionsFromArgs(args);
+    const optionChat = options.chat ?? options.messages ?? options.promptMessages;
+
+    return Array.isArray(optionChat) ? optionChat : [];
+}
 
 // -----------------------------------------------------------------------------
 // Generation Flow - Lifecycle Helpers
 // -----------------------------------------------------------------------------
 
-function beginGenerationLifecycle(characterId) {
+function generationEntityIdsMatch(characterId, personaId) {
+    const normalizedCharacterId = characterId === undefined || characterId === null || characterId === ''
+        ? undefined
+        : normalizeCharacterId(characterId);
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    const currentCharacterMatches = (
+        currentGenerationCharacterId === normalizedCharacterId ||
+        String(currentGenerationCharacterId ?? '') === String(normalizedCharacterId ?? '')
+    );
+
+    const currentPersonaMatches = (
+        currentGenerationPersonaId === normalizedPersonaId ||
+        String(currentGenerationPersonaId ?? '') === String(normalizedPersonaId ?? '')
+    );
+
+    return currentCharacterMatches && currentPersonaMatches;
+}
+
+function beginGenerationLifecycle(characterId, personaId = getActivePersonaId()) {
+    const normalizedCharacterId = characterId === undefined || characterId === null || characterId === ''
+        ? undefined
+        : normalizeCharacterId(characterId);
+    const normalizedPersonaId = normalizePersonaId(personaId);
+
+    // SillyTavern may build/prepare prompt data more than once during one logical
+    // generation. Reusing the active lifecycle prevents Character Trigger Action
+    // state from being treated as "earlier generation" during repeated prompt builds.
+    if (
+        currentGenerationId &&
+        generationEntityIdsMatch(normalizedCharacterId, normalizedPersonaId)
+    ) {
+        clearPreparedPrompt(normalizedCharacterId);
+        clearPreparedPersonaPrompt(normalizedPersonaId);
+        return currentGenerationId;
+    }
+
     generationSerial += 1;
     currentGenerationId = generationSerial;
-    currentGenerationCharacterId = characterId;
-    clearPreparedPrompt(characterId);
+    currentGenerationCharacterId = normalizedCharacterId;
+    currentGenerationPersonaId = normalizedPersonaId;
+
+    clearPreparedPrompt(normalizedCharacterId);
+    clearPreparedPersonaPrompt(normalizedPersonaId);
 
     return currentGenerationId;
 }
 
 function clearGenerationLifecycle() {
     currentGenerationCharacterId = undefined;
+    currentGenerationPersonaId = undefined;
     currentGenerationId = 0;
 }
 
-function resolveInterceptorCharacterId() {
+function resolveInterceptorCharacterId(options = {}) {
+    if (options && Object.keys(options).length) {
+        const generationCharacterId = getGenerationCharacterId(options);
+
+        if (generationCharacterId !== undefined && generationCharacterId !== null && generationCharacterId !== '') {
+            return generationCharacterId;
+        }
+    }
+
     if (currentGenerationCharacterId !== undefined && currentGenerationCharacterId !== null && currentGenerationCharacterId !== '') {
         return currentGenerationCharacterId;
     }
 
     return getActiveCharacterId();
 }
+
+function resolveInterceptorPersonaId(options = {}) {
+    if (options && Object.keys(options).length) {
+        const generationPersonaId = getGenerationPersonaId(options);
+
+        if (generationPersonaId !== undefined && generationPersonaId !== null && generationPersonaId !== '') {
+            return generationPersonaId;
+        }
+    }
+
+    if (currentGenerationPersonaId !== undefined && currentGenerationPersonaId !== null && currentGenerationPersonaId !== '') {
+        return currentGenerationPersonaId;
+    }
+
+    return getActivePersonaId();
+}
+
+// -----------------------------------------------------------------------------
+// Generation Flow - Character Trigger Action Finalization
+// -----------------------------------------------------------------------------
 
 function finalizeTriggerActionLifecycle({ cancel = false } = {}) {
     const characterId = currentGenerationCharacterId;
@@ -4527,7 +7266,7 @@ function finalizeTriggerActionLifecycle({ cancel = false } = {}) {
     let changed = false;
 
     for (const field of state.fields) {
-        const normalized = normalizeField(field);
+        const normalized = normalizeCharacterField(field);
 
         if (
             normalized.triggerActionPhase !== TRIGGER_ACTION_PHASE.ACTION_INJECTED ||
@@ -4564,10 +7303,25 @@ function finalizeTriggerActionLifecycle({ cancel = false } = {}) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Generation Flow - Completion Cleanup
+// -----------------------------------------------------------------------------
+
 function finishGenerationLifecycle({ cancel = false } = {}) {
+    const characterId = currentGenerationCharacterId;
+    const personaId = currentGenerationPersonaId;
+
     finalizeTriggerActionLifecycle({ cancel });
     restoreSuppressedDescriptions();
-    clearPreparedPrompt(currentGenerationCharacterId);
+
+    if (characterId !== undefined && characterId !== null && characterId !== '') {
+        clearPreparedPrompt(characterId);
+    }
+
+    if (personaId !== undefined && personaId !== null && personaId !== '') {
+        clearPreparedPersonaPrompt(personaId);
+    }
+
     clearGenerationLifecycle();
 }
 
@@ -4575,28 +7329,61 @@ function finishGenerationLifecycle({ cancel = false } = {}) {
 // Generation Flow - Prompt Interceptor
 // -----------------------------------------------------------------------------
 
-async function aspectEvolutiaGenerateInterceptor(chat, _contextSize, _abort, _type) {
-    const characterId = resolveInterceptorCharacterId();
+async function aspectEvolutiaGenerateInterceptor(...args) {
+    const chat = getInterceptorChatFromArgs(args);
+    const options = getInterceptorOptionsFromArgs(args);
 
-    if (characterId === undefined || characterId === null || characterId === '') {
+    const characterId = resolveInterceptorCharacterId(options);
+    const personaId = resolveInterceptorPersonaId(options);
+
+    if (
+        (characterId === undefined || characterId === null || characterId === '') &&
+        !personaId
+    ) {
         clearAllPreparedPrompts();
         clearGenerationLifecycle();
         return;
     }
 
-    const state = readState(characterId);
+    const generationId = beginGenerationLifecycle(characterId, personaId);
 
-    if (!state.swapEnabled) {
-        clearPreparedPrompt(characterId);
-        return;
+    if (characterId !== undefined && characterId !== null && characterId !== '') {
+        const characterState = readState(characterId);
+
+        if (characterState.swapEnabled) {
+            const characterPrompt = prepareReplacementPromptForGeneration(
+                characterId,
+                generationId,
+                Array.isArray(chat) ? chat : [],
+                {
+                    mutate: true,
+                },
+            );
+
+            setPreparedPrompt(characterId, generationId, characterPrompt);
+        } else {
+            clearPreparedPrompt(characterId);
+        }
     }
 
-    const generationId = beginGenerationLifecycle(characterId);
-    const prompt = prepareReplacementPromptForGeneration(characterId, generationId, Array.isArray(chat) ? chat : [], {
-        mutate: true,
-    });
+    if (personaId) {
+        const personaState = readPersonaState(personaId);
 
-    setPreparedPrompt(characterId, generationId, prompt);
+        if (personaState.swapEnabled && isPersonaDescriptionInPromptManagerPosition(personaId)) {
+            const personaPrompt = preparePersonaReplacementPromptForGeneration(
+                personaId,
+                generationId,
+                Array.isArray(chat) ? chat : [],
+                {
+                    mutate: true,
+                },
+            );
+
+            setPreparedPersonaPrompt(personaId, generationId, personaPrompt);
+        } else {
+            clearPreparedPersonaPrompt(personaId);
+        }
+    }
 }
 
 globalThis[ASPECT_INTERCEPTOR_NAME] = aspectEvolutiaGenerateInterceptor;
@@ -4625,15 +7412,206 @@ function onGenerationStopped() {
 // Section 17. SillyTavern Event Wiring
 // ============================================================================
 // Purpose:
-// - Own subscriptions to SillyTavern app, character, chat, and generation events.
-// - Bootstrapping may call this once during activation.
+// - Own subscriptions to SillyTavern app, character, persona, chat, prompt,
+//   settings, and generation events.
 // ============================================================================
+
+// -----------------------------------------------------------------------------
+// SillyTavern Event Wiring - Dynamic Fields Menu State
+// -----------------------------------------------------------------------------
+
+function isAnyDynamicFieldsMenuOpen() {
+    return Boolean(
+        $([
+            `#${UI.IMPORT_MENU_ID}.dsf-menu-open`,
+            `#${UI.EXPORT_MENU_ID}.dsf-menu-open`,
+            `#${UI.PERSONA_IMPORT_MENU_ID}.dsf-menu-open`,
+            `#${UI.PERSONA_EXPORT_MENU_ID}.dsf-menu-open`,
+            '.dsf-keyword-triggers-menu.dsf-menu-open',
+            '.dsf-trigger-actions-menu.dsf-menu-open',
+            '.dsf-triggered-by-menu.dsf-menu-open',
+        ].join(',')).length,
+    );
+}
+
+function closeDynamicFieldsMenusForHardRefresh() {
+    if (typeof closeImportExportMenus === 'function') {
+        closeImportExportMenus();
+        return;
+    }
+
+    $('.dsf-menu-open').removeClass('dsf-menu-open');
+}
+
+// -----------------------------------------------------------------------------
+// SillyTavern Event Wiring - Persona Mount Safety
+// -----------------------------------------------------------------------------
+
+function isPersonaUiMounted() {
+    return Boolean(
+        document.getElementById(UI.PERSONA_BAR_ID) &&
+        document.getElementById(UI.PERSONA_PANEL_ID),
+    );
+}
+
+function canMountPersonaUi() {
+    return Boolean(getPersonaDescriptionTextarea().length);
+}
+
+function mountPersonaUiIfMissing() {
+    if (!canMountPersonaUi()) {
+        return;
+    }
+
+    if (isPersonaUiMounted()) {
+        applyPersonaUiVisibility();
+        updatePersonaTokenEstimate();
+        updateSettingsActionState();
+        return;
+    }
+
+    mountPersonaUi();
+}
+
+function schedulePersonaMountIfMissing() {
+    clearTimeout(personaMountTimer);
+
+    personaMountTimer = setTimeout(() => {
+        mountPersonaUiIfMissing();
+    }, 150);
+}
+
+function scheduleAllMountsIfMissing() {
+    if (typeof scheduleMount === 'function') {
+        scheduleMount();
+    } else {
+        setTimeout(mountUi, 150);
+    }
+
+    schedulePersonaMountIfMissing();
+}
+
+function ensurePersonaDomObserver() {
+    if (ensurePersonaDomObserver.observer || !document.body) {
+        return;
+    }
+
+    const observer = new MutationObserver(() => {
+        // Only mount after SillyTavern has actually created/replaced the Persona
+        // description area and our Persona UI is missing. Never remount simply
+        // because Persona Management mutated unrelated DOM.
+        if (canMountPersonaUi() && !isPersonaUiMounted()) {
+            schedulePersonaMountIfMissing();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+    });
+
+    ensurePersonaDomObserver.observer = observer;
+}
+
+// -----------------------------------------------------------------------------
+// SillyTavern Event Wiring - Shared Refresh Helpers
+// -----------------------------------------------------------------------------
+
+function refreshCharacterUiAfterStateChange() {
+    closeDynamicFieldsMenusForHardRefresh();
+
+    stateCache.clear();
+    clearAllPreparedPrompts();
+    clearGenerationLifecycle();
+    restoreSuppressedDescriptions();
+
+    if (typeof scheduleMount === 'function') {
+        scheduleMount();
+    } else {
+        setTimeout(mountUi, 150);
+    }
+
+    updateSettingsActionState();
+    syncPromptManagerWithActiveState();
+}
+
+function refreshPersonaUiAfterPersonaChanged() {
+    // Persona changes are a real identity/context switch. Closing menus here is
+    // correct because the open field editor may now belong to a different persona.
+    closeDynamicFieldsMenusForHardRefresh();
+
+    clearPersonaStateCache();
+    clearAllPreparedPrompts();
+    clearGenerationLifecycle();
+
+    if (isPersonaUiMounted()) {
+        renderPersonaPanel();
+        applyPersonaUiVisibility();
+        updatePersonaTokenEstimate();
+    } else {
+        schedulePersonaMountIfMissing();
+    }
+
+    updateSettingsActionState();
+    syncPromptManagerWithActivePersonaState();
+}
+
+function refreshAllUiAfterStateChange() {
+    closeDynamicFieldsMenusForHardRefresh();
+
+    clearAllStateCaches();
+    clearAllPreparedPrompts();
+    clearGenerationLifecycle();
+    restoreSuppressedDescriptions();
+
+    scheduleAllMountsIfMissing();
+
+    updateSettingsActionState();
+    syncPromptManagerWithActiveStates();
+}
+
+function refreshTokenEstimatesAfterContextChange() {
+    updateTokenEstimate();
+    updatePersonaTokenEstimate();
+}
+
+function refreshAfterGenericSettingsUpdate() {
+    // SETTINGS_UPDATED also fires after our own debounced saves and Prompt Manager
+    // syncs. Do not mount or render panels here; doing so destroys open popout DOM.
+    updateSettingsActionState();
+    refreshTokenEstimatesAfterContextChange();
+
+    if (!isPersonaUiMounted()) {
+        schedulePersonaMountIfMissing();
+    } else {
+        applyPersonaUiVisibility();
+    }
+}
+
+function runAfterSettingsSettle(callback, delay = 100) {
+    setTimeout(callback, delay);
+}
+
+function registerEventHandler(eventSource, eventTypes, eventName, handler) {
+    const eventType = eventTypes?.[eventName];
+
+    if (!eventType || typeof eventSource?.on !== 'function') {
+        return false;
+    }
+
+    eventSource.on(eventType, handler);
+    return true;
+}
 
 // -----------------------------------------------------------------------------
 // SillyTavern Event Wiring - Registration
 // -----------------------------------------------------------------------------
 
 function registerEvents() {
+    if (registerEvents.registered) {
+        return;
+    }
+
     const ctx = getContext();
     const eventSource = ctx?.eventSource;
     const eventTypes = ctx?.eventTypes ?? ctx?.event_types;
@@ -4643,72 +7621,85 @@ function registerEvents() {
         return;
     }
 
-    eventSource.on(eventTypes.APP_READY, () => {
+    registerEvents.registered = true;
+    ensurePersonaDomObserver();
+
+    const onAppReady = () => {
         mountExtensionSettings();
         mountUi();
+        mountPersonaUiIfMissing();
         updateSettingsActionState();
-        syncPromptManagerWithActiveState();
+        syncPromptManagerWithActiveStates();
+    };
+
+    registerEventHandler(eventSource, eventTypes, 'APP_INITIALIZED', () => {
+        mountExtensionSettings();
+        mountUi();
+        mountPersonaUiIfMissing();
+        updateSettingsActionState();
     });
 
-    eventSource.on(eventTypes.CHAT_CHANGED, () => {
-        stateCache.clear();
-        clearAllPreparedPrompts();
-        clearGenerationLifecycle();
-        restoreSuppressedDescriptions();
-        scheduleMount();
-        updateSettingsActionState();
-        syncPromptManagerWithActiveState();
+    registerEventHandler(eventSource, eventTypes, 'APP_READY', onAppReady);
+
+    registerEventHandler(eventSource, eventTypes, 'CHAT_CHANGED', () => {
+        refreshAllUiAfterStateChange();
     });
 
-    eventSource.on(eventTypes.CHARACTER_EDITED, () => {
-        stateCache.clear();
-        clearAllPreparedPrompts();
-        clearGenerationLifecycle();
-        restoreSuppressedDescriptions();
-        scheduleMount();
-        updateSettingsActionState();
-        syncPromptManagerWithActiveState();
+    registerEventHandler(eventSource, eventTypes, 'CHARACTER_EDITED', () => {
+        refreshCharacterUiAfterStateChange();
     });
 
-    eventSource.on(eventTypes.CHARACTER_PAGE_LOADED, () => {
-        stateCache.clear();
-        clearAllPreparedPrompts();
-        clearGenerationLifecycle();
-        scheduleMount();
-        updateSettingsActionState();
-        syncPromptManagerWithActiveState();
+    registerEventHandler(eventSource, eventTypes, 'CHARACTER_PAGE_LOADED', () => {
+        refreshCharacterUiAfterStateChange();
     });
 
-    if (eventTypes.GENERATE_AFTER_DATA) {
-        eventSource.on(eventTypes.GENERATE_AFTER_DATA, onGenerationPromptBuilt);
-    }
+    registerEventHandler(eventSource, eventTypes, 'PERSONA_CHANGED', () => {
+        refreshPersonaUiAfterPersonaChanged();
+    });
 
-    if (eventTypes.GENERATE_AFTER_COMBINE_PROMPTS) {
-        eventSource.on(eventTypes.GENERATE_AFTER_COMBINE_PROMPTS, onGenerationPromptBuilt);
-    }
+    registerEventHandler(eventSource, eventTypes, 'MESSAGE_SENT', () => {
+        runAfterSettingsSettle(refreshTokenEstimatesAfterContextChange, 50);
+    });
 
-    if (eventTypes.GENERATION_ENDED) {
-        eventSource.on(eventTypes.GENERATION_ENDED, onGenerationFinished);
-    }
+    registerEventHandler(eventSource, eventTypes, 'MESSAGE_RECEIVED', () => {
+        runAfterSettingsSettle(refreshTokenEstimatesAfterContextChange, 50);
+    });
 
-    if (eventTypes.GENERATION_STOPPED) {
-        eventSource.on(eventTypes.GENERATION_STOPPED, onGenerationStopped);
-    }
+    registerEventHandler(eventSource, eventTypes, 'USER_MESSAGE_RENDERED', () => {
+        runAfterSettingsSettle(refreshTokenEstimatesAfterContextChange, 50);
+    });
 
-    if (eventTypes.OAI_PRESET_CHANGED_AFTER) {
-        eventSource.on(eventTypes.OAI_PRESET_CHANGED_AFTER, () => {
-            setTimeout(() => {
-                updateSettingsActionState();
-                syncPromptManagerWithActiveState();
-            }, 100);
+    registerEventHandler(eventSource, eventTypes, 'GENERATE_AFTER_DATA', onGenerationPromptBuilt);
+    registerEventHandler(eventSource, eventTypes, 'GENERATE_AFTER_COMBINE_PROMPTS', onGenerationPromptBuilt);
+
+    registerEventHandler(eventSource, eventTypes, 'GENERATION_ENDED', onGenerationFinished);
+    registerEventHandler(eventSource, eventTypes, 'GENERATION_STOPPED', onGenerationStopped);
+
+    registerEventHandler(eventSource, eventTypes, 'OAI_PRESET_CHANGED_AFTER', () => {
+        runAfterSettingsSettle(() => {
+            updateSettingsActionState();
+            syncPromptManagerWithActiveStates();
         });
-    }
+    });
 
-    if (eventTypes.SETTINGS_UPDATED) {
-        eventSource.on(eventTypes.SETTINGS_UPDATED, () => {
-            setTimeout(updateSettingsActionState, 100);
+    registerEventHandler(eventSource, eventTypes, 'PRESET_CHANGED', () => {
+        runAfterSettingsSettle(() => {
+            updateSettingsActionState();
+            syncPromptManagerWithActiveStates();
         });
-    }
+    });
+
+    registerEventHandler(eventSource, eventTypes, 'SETTINGS_UPDATED', () => {
+        runAfterSettingsSettle(refreshAfterGenericSettingsUpdate, 100);
+    });
+
+    registerEventHandler(eventSource, eventTypes, 'WORLDINFO_UPDATED', () => {
+        runAfterSettingsSettle(refreshTokenEstimatesAfterContextChange, 50);
+    });
+
+    registerEventHandler(eventSource, eventTypes, 'WORLDINFO_SETTINGS_UPDATED', () => {
+        runAfterSettingsSettle(refreshTokenEstimatesAfterContextChange, 50);
+    });
 }
 
 // ============================================================================
@@ -4716,7 +7707,6 @@ function registerEvents() {
 // ============================================================================
 // Purpose:
 // - Own remounting the UI when SillyTavern replaces character editor DOM.
-// - Bootstrapping may call this once during activation.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -4758,7 +7748,6 @@ function observeDom() {
 // ============================================================================
 // Purpose:
 // - Own one-time startup for Aspect: Evolutia.
-// - Module self-boots for compatibility.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
