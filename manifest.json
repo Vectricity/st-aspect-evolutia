@@ -6,6 +6,6 @@
   "js": "index.js",
   "generate_interceptor": "aspectEvolutiaGenerateInterceptor",
   "author": "Genisai",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "homePage": "https://github.com/Vectricity/st-aspect-evolutia"
 }

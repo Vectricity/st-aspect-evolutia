@@ -4555,6 +4555,13 @@ function bindExtensionSettingsEvents() {
 // ============================================================================
 // Purpose:
 // - Own CSS, DOM mounting, field-list rendering, and visibility rules.
+// - Character UI mounts near the Character Description field.
+// - Persona UI mounts immediately before SillyTavern's native Persona
+//   Description + Position block, which places it beneath Current Persona's
+//   More... row and above the native Persona Description controls.
+// - Character Dynamic Fields include Trigger Actions.
+// - Persona Dynamic Fields intentionally omit Trigger Actions.
+// - Event handlers may call this after state changes.
 // ============================================================================
 
 // -----------------------------------------------------------------------------
@@ -4571,8 +4578,8 @@ function getDescriptionTextarea() {
 
 function getPersonaDescriptionTextarea() {
     const directSelectors = [
-        '#persona_description_textarea',
         '#persona_description',
+        '#persona_description_textarea',
         'textarea[name="persona_description"]',
         'textarea[name="personaDescription"]',
         'textarea[data-name="persona_description"]',
@@ -4589,7 +4596,6 @@ function getPersonaDescriptionTextarea() {
     }
 
     const containerSelectors = [
-        '#persona_description',
         '#persona_description_block',
         '#persona_description_container',
         '#persona_description_holder',
@@ -4706,6 +4712,7 @@ function setStandardTokenCounterHidden(hidden) {
 
 function getPersonaEditorRootFromDocument() {
     const rootSelectors = [
+        '#persona-management-button .drawer-content',
         '#persona_management',
         '#persona-management',
         '#persona_settings',
@@ -4740,6 +4747,7 @@ function getPersonaEditorRoot() {
     const $root = $description
         .closest(
             [
+                '#persona-management-button .drawer-content',
                 '#persona_management',
                 '#persona-management',
                 '#persona_settings',
@@ -4779,6 +4787,7 @@ function getPersonaDescriptionTokenCounters() {
 
     const $selectorMatches = $root
         .find(PERSONA_TOKEN_COUNTER_SELECTORS.join(','))
+        .add('#persona_description_token_count')
         .not(`#${UI.PERSONA_BAR_ID}`)
         .not(`#${UI.PERSONA_BAR_ID} *`)
         .not(`#${UI.BAR_ID}`)
@@ -4813,19 +4822,19 @@ function setPersonaTokenCounterHidden(hidden) {
         const $element = $(this);
 
         if (hidden) {
-            if (!$element.attr('data-dsf-persona-original-display')) {
-                $element.attr('data-dsf-persona-original-display', $element.css('display') || '');
+            if (!$element.attr('data-dsf-persona-token-original-display')) {
+                $element.attr('data-dsf-persona-token-original-display', $element.css('display') || '');
             }
 
             $element.css('display', 'none');
             return;
         }
 
-        const originalDisplay = $element.attr('data-dsf-persona-original-display');
+        const originalDisplay = $element.attr('data-dsf-persona-token-original-display');
 
         if (originalDisplay !== undefined) {
             $element.css('display', originalDisplay === 'none' ? '' : originalDisplay);
-            $element.removeAttr('data-dsf-persona-original-display');
+            $element.removeAttr('data-dsf-persona-token-original-display');
         }
     });
 }
@@ -5398,14 +5407,14 @@ function ensureStyles() {
             width: 100%;
             white-space: nowrap;
         }
-		
-		#${UI.SETTINGS_ID} .dsf-settings-tagline {
-			font: inherit;
-			font-size: 0.9em;
-			opacity: 0.75;
-			text-align: right;
-			margin: 0 0 8px;
-		}
+
+        #${UI.SETTINGS_ID} .dsf-settings-tagline {
+            font: inherit;
+            font-size: 0.9em;
+            opacity: 0.75;
+            text-align: right;
+            margin: 0 0 8px;
+        }
 
         #${UI.SETTINGS_ID} .dsf-settings-box {
             border: 1px solid #000;
@@ -5415,14 +5424,14 @@ function ensureStyles() {
         }
 
         #${UI.SETTINGS_ID} .dsf-settings-scope-box {
-			border: 1px solid rgba(183, 110, 121, 0.65);
-			outline: 1px solid rgba(183, 110, 121, 0.65);
-			outline-offset: 2px;
-			border-radius: 12px;
-			padding: 10px;
-			margin: 10px 0 14px;
-			background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));
-		}
+            border: 1px solid rgba(183, 110, 121, 0.65);
+            outline: 1px solid rgba(183, 110, 121, 0.65);
+            outline-offset: 2px;
+            border-radius: 12px;
+            padding: 10px;
+            margin: 10px 0 14px;
+            background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));
+        }
 
         #${UI.SETTINGS_ID} .dsf-settings-scope-title {
             font-weight: 700;
@@ -5547,169 +5556,402 @@ function getDescriptionInsertTarget($description) {
 // User Interface Rendering - Persona Mount Helpers
 // -----------------------------------------------------------------------------
 
-function getElementRenderedWidth(element) {
-    if (!element) {
+function normalizePersonaUiText(value) {
+    return String(value || '')
+        .replace(/\s+/g, ' ')
+        .replace(/[:：]+$/g, '')
+        .trim()
+        .toLowerCase();
+}
+
+function getOwnText(element) {
+    return normalizePersonaUiText(
+        Array.from(element?.childNodes || [])
+            .filter((node) => node.nodeType === Node.TEXT_NODE)
+            .map((node) => node.textContent || '')
+            .join(' '),
+    );
+}
+
+function isAspectEvolutiaUiElement(element) {
+    return Boolean($(element).closest(`#${UI.PERSONA_BAR_ID}, #${UI.BAR_ID}`).length);
+}
+
+function isHighLevelPersonaRoot($element) {
+    return $element.is(
+        [
+            '#persona-management-button .drawer-content',
+            '#persona_management',
+            '#persona-management',
+            '#persona_settings',
+            '#persona-settings',
+            '#persona_panel',
+            '#persona-panel',
+            '#persona_container',
+            '#persona-container',
+            '#user_avatar_block',
+            '#user-settings-block',
+            '.persona_management',
+            '.persona-management',
+            '.persona_settings',
+            '.persona-settings',
+            '.persona_editor',
+            '.persona-editor',
+            '.inline-drawer-content',
+        ].join(', '),
+    );
+}
+
+function compareElementOrder(first, second) {
+    if (!first || !second || first === second) {
         return 0;
     }
 
-    const rect = element.getBoundingClientRect?.();
+    const position = first.compareDocumentPosition(second);
 
-    if (rect?.width) {
-        return rect.width;
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
     }
 
-    return Number(element.offsetWidth || 0);
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+        return 1;
+    }
+
+    return 0;
 }
 
-function getPersonaDescriptionVisibilityTarget($description) {
+function isElementBefore(first, second) {
+    return compareElementOrder(first, second) < 0;
+}
+
+function isElementAfter(first, second) {
+    return compareElementOrder(first, second) > 0;
+}
+
+function isRenderablePersonaUiElement() {
+    if (this.nodeType !== Node.ELEMENT_NODE) {
+        return false;
+    }
+
+    if (isAspectEvolutiaUiElement(this)) {
+        return false;
+    }
+
+    const tagName = String(this.tagName || '').toLowerCase();
+
+    return !['script', 'style', 'template'].includes(tagName);
+}
+
+function getPersonaDescriptionLabel($description = getPersonaDescriptionTextarea()) {
     const descriptionElement = $description?.[0];
 
     if (!descriptionElement) {
-        return $description;
+        return $();
     }
 
     const $root = getPersonaEditorRoot();
     const id = String($description.attr('id') || '');
-    let $label = $();
 
     if ($root.length && id) {
-        $label = $root
-            .find('label')
-            .filter(function findLabelForPersonaDescriptionTextarea() {
-                return String(this.getAttribute('for') || '') === id;
+        const $forLabel = $root
+            .find(`label[for="${CSS.escape(id)}"]`)
+            .filter(function filterExactLabel() {
+                return !isAspectEvolutiaUiElement(this);
             })
             .first();
-    }
 
-    if (!$label.length && $root.length) {
-        $label = $root
-            .find('label, div, span, strong')
-            .filter(function findPersonaDescriptionLabelByText() {
-                const text = String($(this).text() || '').trim().toLowerCase();
-
-                return (
-                    text === 'description' ||
-                    text === 'persona description' ||
-                    text === 'persona description / prompt'
-                );
-            })
-            .filter(function excludeAspectEvolutiaUi() {
-                return !$(this).closest(`#${UI.PERSONA_BAR_ID}, #${UI.BAR_ID}`).length;
-            })
-            .first();
-    }
-
-    const labelElement = $label[0];
-
-    if (labelElement) {
-        let node = descriptionElement.parentElement;
-
-        while (node && node !== document.body && node !== document.documentElement) {
-            const $node = $(node);
-
-            if (node.contains(descriptionElement) && node.contains(labelElement)) {
-                if (
-                    !$node.is(
-                        [
-                            '#persona_management',
-                            '#persona-management',
-                            '#persona_settings',
-                            '#persona-settings',
-                            '#persona_panel',
-                            '#persona-panel',
-                            '#persona_container',
-                            '#persona-container',
-                            '#user_avatar_block',
-                            '#user-settings-block',
-                            '.persona_management',
-                            '.persona-management',
-                            '.persona_settings',
-                            '.persona-settings',
-                            '.persona_editor',
-                            '.persona-editor',
-                            '.inline-drawer-content',
-                        ].join(', '),
-                    )
-                ) {
-                    return $node;
-                }
-            }
-
-            if ($root.length && node === $root[0]) {
-                break;
-            }
-
-            node = node.parentElement;
+        if ($forLabel.length) {
+            return $forLabel;
         }
     }
 
-    const $fieldBlock = $description
-        .closest('.range-block, .form-group, .marginBot5, .wide100p, .flex-container')
-        .first();
+    return $root
+        .find('h1, h2, h3, h4, h5, h6, label, div, span, strong')
+        .filter(function findPersonaDescriptionTextLabel() {
+            if (isAspectEvolutiaUiElement(this)) {
+                return false;
+            }
 
-    return $fieldBlock.length ? $fieldBlock : $description;
+            if (!isElementBefore(this, descriptionElement)) {
+                return false;
+            }
+
+            if ($(this).find('textarea, select, button, input, .menu_button').length) {
+                return false;
+            }
+
+            const ownText = getOwnText(this);
+            const allText = normalizePersonaUiText($(this).text());
+
+            return ownText === 'persona description' || allText === 'persona description';
+        })
+        .last();
 }
 
-function getPersonaDescriptionInsertTarget($description) {
-    const $visibilityTarget = getPersonaDescriptionVisibilityTarget($description);
+function getPersonaConnectionsBoundary() {
+    const $description = getPersonaDescriptionTextarea();
+    const descriptionElement = $description[0];
     const $root = getPersonaEditorRoot();
 
-    if (!$visibilityTarget.length || !$root.length) {
-        return $visibilityTarget.length ? $visibilityTarget : $description;
+    if (!$root.length || !descriptionElement) {
+        return $();
     }
 
-    const rootWidth = getElementRenderedWidth($root[0]);
+    return $root
+        .find('h1, h2, h3, h4, h5, h6, label, div, span, strong')
+        .filter(function findConnectionsBoundary() {
+            if (isAspectEvolutiaUiElement(this)) {
+                return false;
+            }
 
-    if (!rootWidth) {
-        return $visibilityTarget;
+            if (!isElementAfter(this, descriptionElement)) {
+                return false;
+            }
+
+            if ($(this).find('textarea, select, button, input, .menu_button').length) {
+                return false;
+            }
+
+            const ownText = getOwnText(this);
+            const allText = normalizePersonaUiText($(this).text());
+
+            return ownText === 'connections' || allText === 'connections';
+        })
+        .first();
+}
+
+function getSmallestSharedPersonaNativeBlock($description = getPersonaDescriptionTextarea()) {
+    const descriptionElement = $description[0];
+    const positionElement = document.getElementById('persona_description_position');
+    const depthElement = document.getElementById('persona_depth_position_settings');
+    const tokenElement = document.getElementById('persona_description_token_count');
+
+    if (!descriptionElement) {
+        return $();
     }
 
-    let bestNode = $visibilityTarget[0];
-    let node = bestNode;
+    const $root = getPersonaEditorRoot();
+    const rootElement = $root[0] || document.body;
+    const elementsToContain = [descriptionElement, positionElement, depthElement, tokenElement].filter(Boolean);
 
-    while (node && node.parentElement && node.parentElement !== document.body && node.parentElement !== document.documentElement) {
+    let node = descriptionElement.parentElement;
+
+    while (node && node !== rootElement && node !== document.body && node !== document.documentElement) {
         const $node = $(node);
 
-        if (
-            $node.is(
-                [
-                    '#persona_management',
-                    '#persona-management',
-                    '#persona_settings',
-                    '#persona-settings',
-                    '#persona_panel',
-                    '#persona-panel',
-                    '#persona_container',
-                    '#persona-container',
-                    '#user_avatar_block',
-                    '#user-settings-block',
-                    '.persona_management',
-                    '.persona-management',
-                    '.persona_settings',
-                    '.persona-settings',
-                    '.persona_editor',
-                    '.persona-editor',
-                    '.inline-drawer-content',
-                ].join(', '),
-            )
-        ) {
+        if (isHighLevelPersonaRoot($node)) {
             break;
         }
 
-        const width = getElementRenderedWidth(node);
+        const containsAll = elementsToContain.every((element) => node.contains(element));
 
-        if (width >= rootWidth * 0.78 || $node.hasClass('wide100p')) {
-            bestNode = node;
-        }
+        if (containsAll) {
+            const text = normalizePersonaUiText($node.text());
 
-        if ($root.length && node === $root[0]) {
-            break;
+            if (
+                !text.includes('connections') &&
+                !text.includes('global settings') &&
+                !text.includes('global persona settings') &&
+                !$node.find('#user_avatar_block, .avatar-container').length
+            ) {
+                return $node;
+            }
         }
 
         node = node.parentElement;
     }
 
-    return $(bestNode);
+    return $();
+}
+
+function getPersonaNativeSatelliteControls() {
+    const $description = getPersonaDescriptionTextarea();
+    const descriptionElement = $description[0];
+    const $root = getPersonaEditorRoot();
+
+    if (!$root.length || !descriptionElement) {
+        return $();
+    }
+
+    const descriptionIds = [
+        'persona_description',
+        'persona_description_textarea',
+    ];
+
+    const $expandButtons = $root
+        .find(
+            [
+                '.editor_maximize',
+                '.right_menu_button',
+                '[title="Expand the editor"]',
+                '[data-i18n*="Expand the editor"]',
+                '[data-for="persona_description"]',
+                '[data-for="persona_description_textarea"]',
+            ].join(', '),
+        )
+        .filter(function filterPersonaDescriptionExpandButton() {
+            if (isAspectEvolutiaUiElement(this)) {
+                return false;
+            }
+
+            const dataFor = String(this.getAttribute('data-for') || '').trim();
+            const title = String(this.getAttribute('title') || '').trim().toLowerCase();
+            const i18n = String(this.getAttribute('data-i18n') || '').trim().toLowerCase();
+            const className = typeof this.className === 'string'
+                ? this.className
+                : String(this.className?.baseVal || '');
+
+            const pointsAtPersonaDescription = descriptionIds.includes(dataFor);
+            const looksLikeExpandButton = (
+                className.includes('editor_maximize') ||
+                title === 'expand the editor' ||
+                i18n.includes('expand the editor')
+            );
+
+            return pointsAtPersonaDescription && looksLikeExpandButton;
+        });
+
+    const $position = $('#persona_description_position');
+    const positionElement = $position[0];
+
+    const $positionForLabels = $('label[for="persona_description_position"]');
+
+    const $positionTextLabels = $root
+		.find('h1, h2, h3, h4, h5, h6, label, div, span, strong, [data-i18n="Position"]')
+		.filter(function filterPersonaPositionLabel() {
+			if (isAspectEvolutiaUiElement(this)) {
+				return false;
+			}
+
+			if (!positionElement) {
+				return false;
+			}
+
+			if (!isElementBefore(this, positionElement)) {
+				return false;
+			}
+
+			if ($(this).find('textarea, select, button, input, .menu_button').length) {
+				return false;
+			}
+
+			const ownText = getOwnText(this);
+			const fullText = normalizePersonaUiText($(this).text());
+			const i18n = normalizePersonaUiText(this.getAttribute('data-i18n'));
+
+			return ownText === 'position' || fullText === 'position' || i18n === 'position';
+		})
+		.last();
+
+    return $expandButtons
+        .add($positionForLabels)
+        .add($positionTextLabels);
+}
+
+function getPersonaNativeRegionTargets() {
+    const $description = getPersonaDescriptionTextarea();
+
+    if (!$description.length) {
+        return $();
+    }
+
+    const $sharedBlock = getSmallestSharedPersonaNativeBlock($description);
+
+    if ($sharedBlock.length) {
+		return $sharedBlock.add(getPersonaNativeSatelliteControls());
+	}
+
+    const $label = getPersonaDescriptionLabel($description);
+    const $position = $('#persona_description_position');
+    const $positionLabel = $('label[for="persona_description_position"]');
+    const $depthSettings = $('#persona_depth_position_settings');
+    const $tokenCounter = $('#persona_description_token_count').closest('.extension_token_counter, .tokenCounterDisplay, div').first();
+
+    let $fallback = $label
+        .add($description)
+        .add($tokenCounter)
+        .add($positionLabel)
+        .add($position)
+        .add($depthSettings);
+
+    const $connectionsBoundary = getPersonaConnectionsBoundary();
+
+    if ($connectionsBoundary.length) {
+        const boundaryElement = $connectionsBoundary[0];
+
+        $fallback = $fallback.filter(function keepBeforeConnections() {
+            return this === boundaryElement || isElementBefore(this, boundaryElement);
+        });
+    }
+
+    return $fallback
+    .add(getPersonaNativeSatelliteControls())
+    .filter(isRenderablePersonaUiElement);
+}
+
+function getPersonaDynamicFieldsInsertTarget() {
+    const $nativeTargets = getPersonaNativeRegionTargets();
+
+    if ($nativeTargets.length) {
+        return $nativeTargets.first();
+    }
+
+    const $description = getPersonaDescriptionTextarea();
+
+    if ($description.length) {
+        const $label = getPersonaDescriptionLabel($description);
+
+        if ($label.length) {
+            return $label;
+        }
+
+        return $description;
+    }
+
+    return $();
+}
+
+function restorePersonaNativeRegionVisibility() {
+    $('[data-dsf-persona-native-region="true"]').each(function restorePersonaRegionElement() {
+        const $element = $(this);
+        const originalDisplay = $element.attr('data-dsf-persona-original-display');
+
+        if (originalDisplay !== undefined) {
+            $element.css('display', originalDisplay || '');
+        } else {
+            $element.css('display', '');
+        }
+
+        $element
+            .removeAttr('data-dsf-persona-native-region')
+            .removeAttr('data-dsf-persona-original-display');
+    });
+}
+
+function setPersonaNativeRegionHidden(hidden) {
+    restorePersonaNativeRegionVisibility();
+
+    if (!hidden) {
+        return;
+    }
+
+    const $region = getPersonaNativeRegionTargets();
+
+    $region.each(function hidePersonaRegionElement() {
+        if (isAspectEvolutiaUiElement(this)) {
+            return;
+        }
+
+        const $element = $(this);
+
+        if (!$element.attr('data-dsf-persona-original-display')) {
+            $element.attr('data-dsf-persona-original-display', $element.css('display') || '');
+        }
+
+        $element
+            .attr('data-dsf-persona-native-region', 'true')
+            .css('display', 'none');
+    });
 }
 
 // -----------------------------------------------------------------------------
@@ -5804,12 +6046,20 @@ function mountPersonaUi() {
 
     ensureStyles();
 
-    if (!$(`#${UI.PERSONA_BAR_ID}`).length) {
+    const $insertTarget = getPersonaDynamicFieldsInsertTarget();
+    const $existingBar = $(`#${UI.PERSONA_BAR_ID}`);
+
+    if ($existingBar.length) {
+        if ($insertTarget.length && $existingBar.next()[0] !== $insertTarget[0]) {
+            restorePersonaNativeRegionVisibility();
+            $insertTarget.before($existingBar);
+        }
+    } else {
         const $bar = $(`
             <div id="${UI.PERSONA_BAR_ID}" data-target-scope="${TARGET_SCOPE.PERSONA}">
                 <div class="dsf-top-controls">
                     <div class="dsf-left-controls">
-                        <label class="checkbox_label dsf-dynamic-toggle-label" title="When enabled, Persona Description is hidden in Persona Management, native personaDescription is disabled in Prompt Manager, and Persona Description (Evolutia) is enabled. Persona Dynamic Fields support Prompt Manager / story-string injection only.">
+                        <label class="checkbox_label dsf-dynamic-toggle-label" title="When enabled, Persona Description and Position are hidden in Persona Management, native personaDescription is disabled in Prompt Manager, and Persona Description (Evolutia) is enabled. Persona Dynamic Fields support Prompt Manager / story-string injection only.">
                             <input id="${UI.PERSONA_SWAP_ID}" type="checkbox" />
                             <span>Dynamic Fields</span>
                         </label>
@@ -5859,7 +6109,11 @@ function mountPersonaUi() {
             </div>
         `);
 
-        getPersonaDescriptionInsertTarget($description).before($bar);
+        if ($insertTarget.length) {
+            $insertTarget.before($bar);
+        } else {
+            $description.before($bar);
+        }
     }
 
     if (typeof bindPersonaUiHandlers === 'function') {
@@ -5916,7 +6170,6 @@ function applyUiVisibility() {
 function applyPersonaUiVisibility() {
     const personaId = getActivePersonaId();
     const state = personaId ? readPersonaState(personaId) : createOutOfBoxPersonaState();
-    const $description = getPersonaDescriptionTextarea();
     const $panel = $(`#${UI.PERSONA_PANEL_ID}`);
     const hasFields = state.fields.length > 0;
 
@@ -5939,9 +6192,7 @@ function applyPersonaUiVisibility() {
     $(`#${UI.PERSONA_ADD_BOTTOM_ID}`).toggle(state.swapEnabled);
     $(`#${UI.PERSONA_TOKEN_ROW_ID}`).css('display', state.swapEnabled ? 'flex' : 'none');
 
-    if ($description.length) {
-        getPersonaDescriptionVisibilityTarget($description).toggle(!state.swapEnabled);
-    }
+    setPersonaNativeRegionHidden(state.swapEnabled);
 
     $panel.toggle(state.swapEnabled);
     setPersonaTokenCounterHidden(state.swapEnabled);
