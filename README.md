@@ -1,5 +1,7 @@
 # Aspect: Evolutia
 
+<img src="https://github.com/Vectricity/st-aspect-destinia/raw/assets/assets/thumbnail_evolutia.png" alt="Thumbnail of Evolutia" width="400">
+
 Aspect: Evolutia is a SillyTavern extension for swapping a Character’s / Persona’s static Description field on-demand with organized, trigger-aware Dynamic Fields.
 
 It is designed for Characters / Personas to evolve across arcs, stages, revelations, timelines, outfits, states, roles, or roleplay conditions. Instead of stuffing every version of a Character / Persona into the Description and asking the model to ignore irrelevant information, Aspect: Evolutia lets you split defining information into separate fields and inject only the fields that matter.
